@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "scan_runs"
+ADD COLUMN "phase" TEXT NOT NULL DEFAULT 'fetch',
+ADD COLUMN "message" TEXT,
+ADD COLUMN "progressUpdatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;

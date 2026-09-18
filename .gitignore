@@ -1,0 +1,29 @@
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+
+# Playwright
+playwright-report/
+test-results/
+
+# Environment files
+.env
+.env.local
+apps/**/.env
+apps/**/.env.local
+
+# Dev-only: OAuth token cache for local development (contains sensitive credentials)
+apps/**/.dev-tokens.json
+
+# Build output (tsc -b and vite build) – never commit compiled artifacts next to source
+apps/**/dist/
+apps/**/dist-tsc/
+*.tsbuildinfo
+
+# Installed dependencies
+node_modules/
+
+# Windows-reserved local artifact
+nul

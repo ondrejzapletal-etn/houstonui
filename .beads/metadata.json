@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "houston_v2_1",
+  "project_id": "fa21b402-e77d-48e0-93fb-5676950249b7"
+}

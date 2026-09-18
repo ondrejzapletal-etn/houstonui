@@ -1,0 +1,507 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                         String                   @id @default(cuid())
+  entraId                    String?                  @unique
+  email                      String                   @unique
+  displayName                String
+  createdAt                  DateTime                 @default(now())
+  updatedAt                  DateTime                 @updatedAt
+  googleId                   String?                  @unique
+  processedMessagesCount     Int                      @default(0)
+  autoReadCount              Int                      @default(0)
+  scansCount                 Int                      @default(0)
+  worklogsCount              Int                      @default(0)
+  worklogsSeconds            Int                      @default(0)
+  /// User's chosen LLM provider. null = follow the deployment default (env AI_PROVIDER).
+  aiProvider                 AiProvider?
+  markReadCount              Int                      @default(0)
+  jiraWorklogsCount          Int?
+  jiraWorklogsSeconds        Int?
+  jiraWorklogsStatsUpdatedAt DateTime?
+  aiUsageLogs                AiUsageLog[]
+  timeSavedEvents            TimeSavedEvent[]
+  calendarEventIssueLinks    CalendarEventIssueLink[]
+  clients                    Client[]
+  connectorCredentials       ConnectorCredential[]
+  jiraIssues                 JiraIssue[]
+  knowledgeEntities          KnowledgeEntity[]
+  knowledgeEvents            KnowledgeEvent[]
+  knowledgeObservations      KnowledgeObservation[]
+  knowledgeRelations         KnowledgeRelation[]
+  projects                   Project[]
+  proposals                  Proposal[]
+  scanRuns                   ScanRun[]
+  sessions                   Session[]
+  slackReadCursors           SlackReadCursor[]
+
+  @@map("users")
+}
+
+model SlackReadCursor {
+  id        String   @id @default(cuid())
+  userId    String
+  channelId String
+  timestamp String
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, channelId])
+  @@index([userId])
+  @@map("slack_read_cursors")
+}
+
+/// One row per AiGatewayService.chat() call, across every provider and call site.
+/// Feeds the token/cost usage summary in Settings → AI model.
+model AiUsageLog {
+  id           String     @id @default(cuid())
+  userId       String
+  provider     AiProvider
+  model        String
+  /// 'fast' | 'high' – kept as a plain string so a new tier never needs a migration.
+  quality      String
+  inputTokens  Int
+  outputTokens Int
+  /// null when the model has no entry in the pricing table (e.g. a custom
+  /// ANTHROPIC_MODEL_* override) – token counts are still recorded.
+  costUsd      Float?
+  createdAt    DateTime   @default(now())
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("ai_usage_logs")
+}
+
+/// One row per time-saving action. Stores only the event (kind + count);
+/// seconds are computed client-side from user-configurable coefficients,
+/// so changing a coefficient retroactively recomputes all history.
+model TimeSavedEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  /// 'scan' | 'processed_message' | 'auto_read' | 'mark_read' | 'worklog'
+  /// – kept as a plain string so a new kind never needs a migration.
+  kind      String
+  /// Number of actions this event represents (auto-read batches carry markedCount).
+  count     Int      @default(1)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("time_saved_events")
+}
+
+model Session {
+  id               String   @id @default(cuid())
+  userId           String
+  refreshTokenHash String
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model ConnectorCredential {
+  id                   String          @id @default(cuid())
+  userId               String
+  connectorType        ConnectorType
+  /// Name of the secret in Azure Key Vault – never the secret value itself
+  keyVaultSecretName   String          @unique
+  status               ConnectorStatus @default(ACTIVE)
+  /// OAuth scopes granted at time of authorization
+  scopes               String[]
+  /// Provider account identifier (e.g. Gmail address, Slack user ID)
+  externalAccountId    String?
+  /// Expiry metadata – used for proactive refresh scheduling
+  tokenExpiresAt       DateTime?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+  /// Cached unread message count (refreshed periodically or on-demand)
+  unreadCount          Int?
+  /// When the unread count was last successfully fetched
+  unreadCountFetchedAt DateTime?
+  user                 User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, connectorType])
+  @@index([userId])
+  @@index([status])
+  @@map("connector_credentials")
+}
+
+model ScanRun {
+  id                    String                 @id @default(cuid())
+  userId                String
+  status                ScanStatus             @default(RUNNING)
+  startedAt             DateTime               @default(now())
+  completedAt           DateTime?
+  /// Structured summary (counts per source, tier counts, etc.)
+  metadata              Json?
+  phase                 String                 @default("fetch")
+  message               String?
+  progressUpdatedAt     DateTime               @default(now()) @updatedAt
+  knowledgeObservations KnowledgeObservation[]
+  proposals             Proposal[]
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("scan_runs")
+}
+
+model Proposal {
+  id               String         @id @default(cuid())
+  /// Null for task-generated proposals (not tied to a scan run)
+  scanRunId        String?
+  userId           String
+  /// Source system: "gmail" | "slack" | "jira" | "calendar" | "task"
+  system           String
+  kind             ProposalKind   @default(MESSAGE_REPLY)
+  /// Tier 1 = Action Required, 2 = Important Updates
+  tier             Int
+  summary          String
+  detail           String?
+  /// Full message draft (for Tier 1–2)
+  draft            String?
+  /// Direct link to the item (Gmail message URL, Slack thread URL, etc.)
+  url              String?
+  /// Provider-side identifier (Gmail messageId, Slack ts, Jira issue key, etc.)
+  externalId       String?
+  status           ProposalStatus @default(PENDING)
+  confidence       Float?
+  risk             String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  /// Jira issue key associated with this proposal (e.g. "PROJ-123")
+  issueKey         String?
+  /// Optional link to a Project (resolved at scan or approval time)
+  projectId        String?
+  /// Snapshot of the original message text (built at scan time, not re-fetched)
+  originalMessage  String?
+  /// When the triggering source event occurred (email received or Slack message posted)
+  sourceOccurredAt DateTime?
+  /// Stable semantic topic and requested-action key for pending-proposal deduplication
+  topicKey         String?
+  /// Gmail message IDs represented by an aggregated document-review proposal
+  sourceMessageIds String[]        @default([])
+  project          Project?       @relation(fields: [projectId], references: [id])
+  scanRun          ScanRun?       @relation(fields: [scanRunId], references: [id], onDelete: Cascade)
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([scanRunId])
+  @@index([status])
+  @@index([userId, topicKey])
+  @@map("proposals")
+}
+
+/// Business entity (client / customer)
+model Client {
+  id        String    @id @default(cuid())
+  userId    String
+  /// Brand name, e.g. "Acme Corp"
+  name      String
+  /// Primary domain, e.g. "acme.cz"
+  domain    String?
+  notes     String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projects  Project[]
+
+  @@index([userId])
+  @@map("clients")
+}
+
+/// Project / engagement (may belong to a Client)
+model Project {
+  id             String                   @id @default(cuid())
+  userId         String
+  clientId       String?
+  name           String
+  /// Jira project key, also used as project code (e.g. "PROJ")
+  jiraProjectKey String?
+  /// Project manager e-mail
+  pmEmail        String?
+  notes          String?
+  active         Boolean                  @default(true)
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+  calendarLinks  CalendarEventIssueLink[]
+  issues         JiraIssue[]
+  client         Client?                  @relation(fields: [clientId], references: [id])
+  user           User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  proposals      Proposal[]
+
+  @@index([userId])
+  @@index([userId, jiraProjectKey])
+  @@map("projects")
+}
+
+/// Locally cached Jira issue (populated on first use or manual add)
+model JiraIssue {
+  id            String                   @id @default(cuid())
+  userId        String
+  projectId     String?
+  /// Jira issue key, e.g. "PROJ-123"
+  issueKey      String
+  /// Issue title/summary cached from Jira
+  summary       String
+  lastSyncedAt  DateTime?
+  active        Boolean                  @default(true)
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  calendarLinks CalendarEventIssueLink[]
+  project       Project?                 @relation(fields: [projectId], references: [id])
+  user          User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, issueKey])
+  @@index([userId])
+  @@map("jira_issues")
+}
+
+/// Remembers which Jira issue was used to log work for a given calendar event
+model CalendarEventIssueLink {
+  id               String     @id @default(cuid())
+  userId           String
+  /// Google Calendar event ID
+  calendarEventId  String
+  /// Jira issue key (denormalised for fast lookup without joining JiraIssue)
+  issueKey         String
+  /// Optional FK to cached JiraIssue record
+  jiraIssueId      String?
+  /// Optional FK to Project for quick filtering
+  projectId        String?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  /// Google Calendar recurring series ID (present only for recurring event occurrences).
+  /// Used for fallback lookup: if no link is found for the specific calendarEventId,
+  /// the service looks for any link with this recurringEventId so all occurrences of
+  /// the same series share one binding.
+  recurringEventId String?
+  jiraIssue        JiraIssue? @relation(fields: [jiraIssueId], references: [id])
+  project          Project?   @relation(fields: [projectId], references: [id])
+  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, calendarEventId])
+  @@index([userId])
+  @@index([userId, recurringEventId])
+  @@map("calendar_event_issue_links")
+}
+
+/// Generic node in the knowledge graph
+model KnowledgeEntity {
+  id                String                  @id @default(cuid())
+  userId            String
+  /// 'person' | 'task' | 'project' | 'conversation' | 'artifact' | 'organization'
+  type              String
+  title             String
+  description       String?
+  status            String?
+  metadata          Json                    @default("{}")
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  derivedState      KnowledgeDerivedState?
+  user              User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events            KnowledgeEvent[]
+  externalLinks     KnowledgeExternalLink[]
+  facts             KnowledgeFact[]
+  observations      KnowledgeObservation[]
+  outgoingRelations KnowledgeRelation[]     @relation("RelationFrom")
+  incomingRelations KnowledgeRelation[]     @relation("RelationTo")
+
+  @@index([userId, type])
+  @@map("knowledge_entities")
+}
+
+/// Maps an external system ID to a KnowledgeEntity (entity resolution)
+model KnowledgeExternalLink {
+  id           String          @id @default(cuid())
+  entityId     String
+  sourceSystem String
+  sourceType   String
+  sourceRef    String
+  metadata     Json            @default("{}")
+  entity       KnowledgeEntity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceSystem, sourceType, sourceRef])
+  @@index([entityId])
+  @@map("knowledge_external_links")
+}
+
+/// Directed graph edge between two entities
+model KnowledgeRelation {
+  id           String          @id @default(cuid())
+  userId       String
+  fromEntityId String
+  toEntityId   String
+  relationType String
+  confidence   Float           @default(1.0)
+  metadata     Json            @default("{}")
+  createdAt    DateTime        @default(now())
+  fromEntity   KnowledgeEntity @relation("RelationFrom", fields: [fromEntityId], references: [id], onDelete: Cascade)
+  toEntity     KnowledgeEntity @relation("RelationTo", fields: [toEntityId], references: [id], onDelete: Cascade)
+  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([fromEntityId, toEntityId, relationType])
+  @@index([fromEntityId])
+  @@index([toEntityId])
+  @@index([userId])
+  @@map("knowledge_relations")
+}
+
+/// Raw inbound observation from any connector (append-only).
+/// A native partial unique index prevents duplicate root observations while
+/// allowing one source item to be linked to multiple knowledge entities.
+model KnowledgeObservation {
+  id           String           @id @default(cuid())
+  userId       String
+  scanRunId    String?
+  entityId     String?
+  isPrimary    Boolean          @default(false)
+  sourceSystem String
+  sourceType   String
+  sourceRef    String
+  observedAt   DateTime
+  content      String?
+  rawPayload   Json             @default("{}")
+  processed    Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+  entity       KnowledgeEntity? @relation(fields: [entityId], references: [id])
+  scanRun      ScanRun?         @relation(fields: [scanRunId], references: [id])
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, processed])
+  @@index([sourceSystem, sourceRef])
+  @@index([scanRunId])
+  @@map("knowledge_observations")
+}
+
+/// Current-state key-value pair per entity
+model KnowledgeFact {
+  id         String          @id @default(cuid())
+  entityId   String
+  key        String
+  value      Json
+  confidence Float           @default(1.0)
+  source     String?
+  updatedAt  DateTime        @updatedAt
+  entity     KnowledgeEntity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@unique([entityId, key])
+  @@index([entityId])
+  @@map("knowledge_facts")
+}
+
+/// Append-only event log for all knowledge mutations
+model KnowledgeEvent {
+  id        String           @id @default(cuid())
+  userId    String
+  entityId  String?
+  eventType String
+  payload   Json             @default("{}")
+  createdAt DateTime         @default(now())
+  entity    KnowledgeEntity? @relation(fields: [entityId], references: [id])
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([entityId])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("knowledge_events")
+}
+
+/// AI-computed summary and scores per entity (invalidated on update)
+model KnowledgeDerivedState {
+  id           String          @id @default(cuid())
+  entityId     String          @unique
+  summary      String?
+  insights     Json?
+  urgencyScore Float?
+  riskScore    Float?
+  relatedIds   String[]
+  modelVersion String?
+  computedAt   DateTime        @default(now())
+  invalidated  Boolean         @default(false)
+  entity       KnowledgeEntity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@map("knowledge_derived_states")
+}
+
+model AuditLog {
+  id            String   @id @default(cuid())
+  /// The authenticated user who performed the action (null for system actions)
+  userId        String?
+  /// Dot-notation action name, e.g. "connector.connect", "connector.disconnect"
+  action        String
+  /// Optional connector context
+  connectorType String?
+  /// Arbitrary structured metadata (request id, outcome, etc.)
+  metadata      Json?
+  /// Source IP address (when available)
+  ipAddress     String?
+  createdAt     DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model OAuthState {
+  id           String   @id
+  /// PKCE codeVerifier or placeholder value
+  codeVerifier String
+  /// Expiry timestamp – records after this time are considered invalid
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  @@index([expiresAt])
+  @@map("oauth_states")
+}
+
+/// LLM provider behind AiGatewayService (ADR-001 OpenAI, ADR-003 Anthropic).
+enum AiProvider {
+  OPENAI
+  ANTHROPIC
+}
+
+enum ConnectorType {
+  GMAIL
+  SLACK
+  JIRA
+  CLOCKIFY
+  CALENDAR
+  HOTSPOT
+}
+
+enum ConnectorStatus {
+  ACTIVE
+  EXPIRED
+  INVALID
+  REVOKED
+}
+
+enum ScanStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum ProposalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXECUTED
+  EXPIRED
+  READ
+}
+
+enum ProposalKind {
+  MESSAGE_REPLY
+  DOCUMENT_REVIEW
+}
