@@ -237,10 +237,41 @@ describe('GmailService', () => {
       await service.fetchPreviewEmails('user-1')
 
       const listUrl = String((global.fetch as jest.Mock).mock.calls[0][0])
-      expect(new URL(listUrl).searchParams.get('q')).toBe('in:inbox -in:spam -in:trash -from:me')
+      expect(new URL(listUrl).searchParams.get('q')).toBe('in:inbox -in:spam -in:trash')
     })
 
-    it('keeps all senders when the connected account identity is unavailable', async () => {
+    it('keeps an inbox message addressed to the connected account even when it was sent by that account', async () => {
+      mockCredentials.getTokens.mockResolvedValueOnce(makeTokens())
+      mockCredentials.getMetadata.mockResolvedValueOnce(makeMeta())
+      global.fetch = jest
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ messages: [{ id: 'self-addressed' }] }),
+          text: async () => '',
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'self-addressed',
+            payload: {
+              headers: [
+                { name: 'From', value: 'User <user@gmail.com>' },
+                { name: 'To', value: 'User <user@gmail.com>' },
+              ],
+            },
+          }),
+          text: async () => '',
+        } as Response)
+
+      const result = await service.fetchPreviewEmails('user-1')
+
+      expect(result.map((email) => email.messageId)).toEqual(['self-addressed'])
+    })
+
+    it('resolves the connected account identity when credential metadata is missing it', async () => {
       mockCredentials.getTokens.mockResolvedValueOnce(makeTokens())
       mockCredentials.getMetadata.mockResolvedValueOnce(makeMeta({ externalAccountId: '' }))
       global.fetch = jest
@@ -248,7 +279,13 @@ describe('GmailService', () => {
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
-          json: async () => ({ messages: [{ id: 'message-1' }] }),
+          json: async () => ({ emailAddress: 'user@gmail.com' }),
+          text: async () => '',
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ messages: [{ id: 'message-1' }, { id: 'message-2' }] }),
           text: async () => '',
         } as Response)
         .mockResolvedValueOnce({
@@ -256,7 +293,19 @@ describe('GmailService', () => {
           status: 200,
           json: async () => ({
             id: 'message-1',
-            payload: { headers: [{ name: 'From', value: 'user@gmail.com' }] },
+            payload: { headers: [
+              { name: 'From', value: 'colleague@example.com' },
+              { name: 'To', value: 'User <USER@gmail.com>' },
+            ] },
+          }),
+          text: async () => '',
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            id: 'message-2',
+            payload: { headers: [{ name: 'From', value: 'User <user@gmail.com>' }] },
           }),
           text: async () => '',
         } as Response)
@@ -264,6 +313,15 @@ describe('GmailService', () => {
       const result = await service.fetchScanEmails('user-1')
 
       expect(result).toHaveLength(1)
+      expect(result[0]).toEqual(expect.objectContaining({
+        messageId: 'message-1',
+        recipientRole: 'to',
+      }))
+      expect(global.fetch).toHaveBeenNthCalledWith(
+        1,
+        'https://gmail.googleapis.com/gmail/v1/users/me/profile',
+        expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer access-tok' }) }),
+      )
     })
   })
 
@@ -331,18 +389,24 @@ describe('GmailService', () => {
   // ── getUnreadCount ─────────────────────────────────────────────────────────
 
   describe('getUnreadCount', () => {
-    it('returns unread count from resultSizeEstimate on success', async () => {
+    it('returns unread inbox messages from the INBOX label on success', async () => {
       mockCredentials.getTokens.mockResolvedValueOnce(makeTokens())
       mockCredentials.getMetadata.mockResolvedValueOnce(makeMeta())
-      mockFetch(true, { resultSizeEstimate: 42, threads: [] })
+      mockFetch(true, { messagesUnread: 19, threadsUnread: 15 })
 
       const result = await service.getUnreadCount('user-1')
 
-      expect(result.unreadCount).toBe(42)
+      expect(result.unreadCount).toBe(19)
       expect(result.externalAccountId).toBe('user@gmail.com')
+      expect(global.fetch).toHaveBeenCalledWith(
+        'https://gmail.googleapis.com/gmail/v1/users/me/labels/INBOX',
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: 'Bearer access-tok' }),
+        }),
+      )
     })
 
-    it('returns 0 when inbox is empty (no resultSizeEstimate, no threads)', async () => {
+    it('returns 0 when the INBOX label has no messagesUnread value', async () => {
       mockCredentials.getTokens.mockResolvedValueOnce(makeTokens())
       mockCredentials.getMetadata.mockResolvedValueOnce(makeMeta())
       mockFetch(true, {})
@@ -365,11 +429,11 @@ describe('GmailService', () => {
           json: async () => ({ access_token: 'new-access-tok', expires_in: 3600 }),
           text: async () => '',
         } as Response)
-        // Second fetch call: gmail threads
+        // Second fetch call: Gmail INBOX label
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
-          json: async () => ({ resultSizeEstimate: 5 }),
+          json: async () => ({ messagesUnread: 5 }),
           text: async () => '',
         } as Response)
 
@@ -404,7 +468,7 @@ describe('GmailService', () => {
         .mockResolvedValueOnce({
           ok: true,
           status: 200,
-          json: async () => ({ resultSizeEstimate: 7 }),
+          json: async () => ({ messagesUnread: 7 }),
           text: async () => '',
         } as Response)
 

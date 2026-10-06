@@ -24,6 +24,7 @@ export interface ScanSourceData {
 
 /** Hard cap per source – prevents one slow/rate-limited connector from blocking the response. */
 const SOURCE_TIMEOUT_MS = 5_000
+const GMAIL_TIMEOUT_MS = 30_000
 
 /** Slack needs extra time due to per-channel 1300ms throttling (up to 15 channels). */
 const SLACK_TIMEOUT_MS = 90_000
@@ -64,7 +65,7 @@ export class ScanFetcherService {
     const timeoutError = 'Source timed out – will retry on next refresh'
 
     const [gmail, slack, calendar, jiraToday, clockify] = await Promise.all([
-      withTimeout(this.safeGmail(userId), { emails: [], error: timeoutError }, SOURCE_TIMEOUT_MS),
+      withTimeout(this.safeGmail(userId), { emails: [], error: timeoutError }, GMAIL_TIMEOUT_MS),
       withTimeout(this.safeSlack(userId), { result: { channels: [], answeredMessages: [] }, error: timeoutError }, SLACK_TIMEOUT_MS),
       withTimeout(this.safeCalendar(userId, todayStart, tomorrowEnd), { result: { events: [] }, error: timeoutError }, SOURCE_TIMEOUT_MS),
       withTimeout(this.safeJira(userId, now.getFullYear(), now.getMonth() + 1), { result: null, error: timeoutError }, SOURCE_TIMEOUT_MS),

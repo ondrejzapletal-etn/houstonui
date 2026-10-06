@@ -14,6 +14,10 @@ import {
   markSlackPreviewRead,
 } from '../../services/sourcePreviewClient'
 import {
+  createProposalFromSourceMessage,
+  PROPOSAL_CREATED_EVENT,
+} from '../../services/proposalsApi'
+import {
   useSourcePreview,
   type SourcePreviewData,
   type SourcePreviewWorklogEntry,
@@ -59,6 +63,12 @@ interface MarkReadState {
   errors: Record<string, string>
 }
 
+interface CreateProposalState {
+  creatingIds: Set<string>
+  createdIds: Set<string>
+  errors: Record<string, string>
+}
+
 function MessageIndicators({
   isUnread,
   hasResponded,
@@ -93,10 +103,14 @@ function EmailList({
   emails,
   markReadState,
   onMarkRead,
+  createProposalState,
+  onCreateProposal,
 }: {
   emails: SourcePreviewEmail[]
   markReadState: MarkReadState
   onMarkRead: (messageId: string) => void
+  createProposalState: CreateProposalState
+  onCreateProposal: (messageId: string) => void
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
@@ -106,6 +120,8 @@ function EmailList({
         const isExpanded = expandedId === email.messageId
         const isUnread = email.isUnread && !markReadState.readIds.has(email.messageId)
         const isMarking = markReadState.markingIds.has(email.messageId)
+        const isCreating = createProposalState.creatingIds.has(email.messageId)
+        const isCreated = createProposalState.createdIds.has(email.messageId)
         return (
           <li key={email.messageId} className={isUnread ? 'bg-gray-800/35' : undefined}>
             <button
@@ -136,8 +152,17 @@ function EmailList({
                 <p className="mt-1 line-clamp-2 text-xs text-gray-500">{email.snippet}</p>
               )}
             </button>
-            {isUnread && (
-              <div className="flex items-center gap-2 px-2 pb-3">
+            <div className="flex flex-wrap items-center gap-2 px-2 pb-3">
+              <button
+                type="button"
+                onClick={() => onCreateProposal(email.messageId)}
+                disabled={isCreating || isCreated}
+                className="button-action local small"
+                aria-label={`Vytvořit proposal z e-mailu ${email.subject}`}
+              >
+                {isCreating ? 'Vytvářím…' : isCreated ? 'Proposal vytvořena' : 'Vytvořit proposal'}
+              </button>
+              {isUnread && (
                 <button
                   type="button"
                   onClick={() => onMarkRead(email.messageId)}
@@ -147,13 +172,18 @@ function EmailList({
                 >
                   {isMarking ? '…' : 'Označit přečtené'}
                 </button>
-                {markReadState.errors[email.messageId] && (
-                  <span role="alert" className="text-xs text-red-400">
-                    {markReadState.errors[email.messageId]}
-                  </span>
-                )}
-              </div>
-            )}
+              )}
+              {createProposalState.errors[email.messageId] && (
+                <span role="alert" className="text-xs text-red-400">
+                  {createProposalState.errors[email.messageId]}
+                </span>
+              )}
+              {isUnread && markReadState.errors[email.messageId] && (
+                <span role="alert" className="text-xs text-red-400">
+                  {markReadState.errors[email.messageId]}
+                </span>
+              )}
+            </div>
             {isExpanded && (
               <div className="px-2 pb-4">
                 <p className="whitespace-pre-wrap break-words rounded-md border border-gray-800 bg-gray-950 px-3 py-2 text-xs leading-relaxed text-gray-300">
@@ -172,26 +202,26 @@ function SlackChannelList({
   channels,
   markReadState,
   onMarkRead,
+  createProposalState,
+  onCreateProposal,
 }: {
   channels: SourcePreviewSlackChannel[]
   markReadState: MarkReadState
   onMarkRead: (channelId: string, ts: string) => void
+  createProposalState: CreateProposalState
+  onCreateProposal: (channelId: string, ts: string) => void
 }) {
   return (
     <div className="divide-y divide-gray-800">
-      {channels.map((channel) => {
-        const msg = channel.messages.reduce<(typeof channel.messages)[number] | null>(
-          (latest, message) => !latest || Number(message.ts) > Number(latest.ts) ? message : latest,
-          null,
-        )
-        if (!msg) return null
-
+      {channels.flatMap((channel) => channel.messages.map((msg) => {
         const messageKey = `${channel.channelId}:${msg.ts}`
         const isUnread = msg.isUnread && !markReadState.readIds.has(messageKey)
         const isMarking = markReadState.markingIds.has(messageKey)
+        const isCreating = createProposalState.creatingIds.has(messageKey)
+        const isCreated = createProposalState.createdIds.has(messageKey)
         const receivedAt = slackTimestampToIso(msg.ts)
         return (
-          <div key={channel.channelId} className={`px-4 py-4 ${isUnread ? 'bg-gray-800/35' : ''}`}>
+          <div key={messageKey} className={`px-4 py-4 ${isUnread ? 'bg-gray-800/35' : ''}`}>
             <div className="flex items-center justify-between gap-4">
               <p className="text-sm font-semibold text-indigo-300">
                 {channel.conversationType === 'dm' || channel.conversationType === 'mpim' ? '@' : '#'}
@@ -214,8 +244,17 @@ function SlackChannelList({
                 isAddressedToUser={msg.isAddressedToUser}
               />
             </div>
-            {isUnread && (
-              <div className="mt-3 flex items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onCreateProposal(channel.channelId, msg.ts)}
+                disabled={isCreating || isCreated}
+                className="button-action local small"
+                aria-label={`Vytvořit proposal ze Slack zprávy od ${msg.userName || msg.userId}`}
+              >
+                {isCreating ? 'Vytvářím…' : isCreated ? 'Proposal vytvořena' : 'Vytvořit proposal'}
+              </button>
+              {isUnread && (
                 <button
                   type="button"
                   onClick={() => onMarkRead(channel.channelId, msg.ts)}
@@ -225,16 +264,21 @@ function SlackChannelList({
                 >
                   {isMarking ? '…' : 'Označit přečtené'}
                 </button>
-                {markReadState.errors[messageKey] && (
-                  <span role="alert" className="text-xs text-red-400">
-                    {markReadState.errors[messageKey]}
-                  </span>
-                )}
-              </div>
-            )}
+              )}
+              {createProposalState.errors[messageKey] && (
+                <span role="alert" className="text-xs text-red-400">
+                  {createProposalState.errors[messageKey]}
+                </span>
+              )}
+              {isUnread && markReadState.errors[messageKey] && (
+                <span role="alert" className="text-xs text-red-400">
+                  {markReadState.errors[messageKey]}
+                </span>
+              )}
+            </div>
           </div>
         )
-      })}
+      }))}
     </div>
   )
 }
@@ -292,6 +336,11 @@ export default function SourcePreviewModal({ connector, onClose }: SourcePreview
   const [markReadState, setMarkReadState] = useState<MarkReadState>({
     markingIds: new Set(),
     readIds: new Set(),
+    errors: {},
+  })
+  const [createProposalState, setCreateProposalState] = useState<CreateProposalState>({
+    creatingIds: new Set(),
+    createdIds: new Set(),
     errors: {},
   })
 
@@ -361,6 +410,43 @@ export default function SourcePreviewModal({ connector, onClose }: SourcePreview
     }
   }
 
+  async function createProposal(
+    messageKey: string,
+    request: Parameters<typeof createProposalFromSourceMessage>[0],
+  ): Promise<void> {
+    setCreateProposalState((state) => ({
+      ...state,
+      creatingIds: new Set(state.creatingIds).add(messageKey),
+      errors: { ...state.errors, [messageKey]: '' },
+    }))
+    try {
+      const proposal = await createProposalFromSourceMessage(request)
+      queryClient.setQueryData(['proposals'], (current: unknown) => {
+        const proposals = Array.isArray(current) ? current : []
+        return proposals.some((item) => item && typeof item === 'object' && 'id' in item && item.id === proposal.id)
+          ? proposals
+          : [proposal, ...proposals]
+      })
+          window.dispatchEvent(new CustomEvent(PROPOSAL_CREATED_EVENT, { detail: proposal }))
+      setCreateProposalState((state) => {
+        const creatingIds = new Set(state.creatingIds)
+        creatingIds.delete(messageKey)
+        return { ...state, creatingIds, createdIds: new Set(state.createdIds).add(messageKey) }
+      })
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Neznámá chyba'
+      setCreateProposalState((state) => {
+        const creatingIds = new Set(state.creatingIds)
+        creatingIds.delete(messageKey)
+        return {
+          ...state,
+          creatingIds,
+          errors: { ...state.errors, [messageKey]: `Vytvoření proposal se nezdařilo: ${message}` },
+        }
+      })
+    }
+  }
+
   function renderBody() {
     if (!isUsable) {
       return (
@@ -411,10 +497,12 @@ export default function SourcePreviewModal({ connector, onClose }: SourcePreview
           <EmailList
             emails={data.emails}
             markReadState={markReadState}
+            createProposalState={createProposalState}
             onMarkRead={(messageId) => void markRead(
               messageId,
               () => markGmailPreviewRead(accessToken ?? '', messageId),
             )}
+            onCreateProposal={(messageId) => void createProposal(messageId, { source: 'gmail', messageId })}
           />
         )
       case 'slack':
@@ -424,9 +512,14 @@ export default function SourcePreviewModal({ connector, onClose }: SourcePreview
           <SlackChannelList
             channels={data.channels}
             markReadState={markReadState}
+            createProposalState={createProposalState}
             onMarkRead={(channelId, ts) => void markRead(
               `${channelId}:${ts}`,
               () => markSlackPreviewRead(accessToken ?? '', channelId, ts),
+            )}
+            onCreateProposal={(channelId, ts) => void createProposal(
+              `${channelId}:${ts}`,
+              { source: 'slack', channelId, ts },
             )}
           />
         )

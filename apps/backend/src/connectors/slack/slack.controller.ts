@@ -59,25 +59,20 @@ export class SlackController {
       return {
         success: true,
         data: {
-          channels: channels.flatMap((channel) => {
-            const latestMessage = channel.messages.reduce<(typeof channel.messages)[number] | null>(
-              (latest, message) => !latest || Number(message.ts) > Number(latest.ts) ? message : latest,
-              null,
-            )
-            if (!latestMessage) return []
-            return [{
+          channels: channels
+            .filter((channel) => channel.messages.length > 0)
+            .map((channel) => ({
               ...channel,
-              messages: [{
-                ...latestMessage,
-                isUnread: latestMessage.isUnread ?? true,
-                hasResponded: answeredKeys.has(`${channel.channelId}:${latestMessage.ts}`),
+              messages: channel.messages.map((message) => ({
+                ...message,
+                isUnread: message.isUnread ?? true,
+                hasResponded: answeredKeys.has(`${channel.channelId}:${message.ts}`),
                 isAddressedToUser:
                   channel.conversationType === 'dm' ||
-                  latestMessage.mentionsCurrentUser === true ||
-                  mentionValues.some((mention) => latestMessage.text.toLocaleLowerCase().includes(mention)),
-              }],
-            }]
-          }),
+                  message.mentionsCurrentUser === true ||
+                  mentionValues.some((mention) => message.text.toLocaleLowerCase().includes(mention)),
+              })),
+            })),
         },
       }
     } catch (error: unknown) {

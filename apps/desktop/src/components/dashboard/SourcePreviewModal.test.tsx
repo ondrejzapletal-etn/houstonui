@@ -13,6 +13,12 @@ vi.mock('../../services/sourcePreviewClient', () => ({
   markSlackPreviewRead: vi.fn(),
 }))
 
+vi.mock('../../services/proposalsApi', () => ({
+  createProposalFromSourceMessage: vi.fn(),
+  PROPOSALS_QUERY_KEY: ['proposals'],
+  PROPOSAL_CREATED_EVENT: 'houston:proposal-created',
+}))
+
 vi.mock('../../services/connectorsClient', () => ({
   fetchJiraWorklogsDay: vi.fn(),
   fetchClockifyWorklogsDay: vi.fn(),
@@ -25,12 +31,14 @@ import {
   markSlackPreviewRead,
 } from '../../services/sourcePreviewClient'
 import { fetchClockifyWorklogsDay } from '../../services/connectorsClient'
+import { createProposalFromSourceMessage } from '../../services/proposalsApi'
 
 const mockGmailPreview = vi.mocked(fetchGmailPreview)
 const mockSlackPreview = vi.mocked(fetchSlackPreview)
 const mockMarkGmailRead = vi.mocked(markGmailPreviewRead)
 const mockMarkSlackRead = vi.mocked(markSlackPreviewRead)
 const mockClockifyDay = vi.mocked(fetchClockifyWorklogsDay)
+const mockCreateProposal = vi.mocked(createProposalFromSourceMessage)
 
 const gmail: ConnectorInfo = {
   id: 'gmail',
@@ -132,6 +140,22 @@ describe('SourcePreviewModal', () => {
     expect(screen.getByText('Přečteno')).toBeInTheDocument()
   })
 
+  it('creates a Gmail proposal only after its explicit message action', async () => {
+    mockGmailPreview.mockResolvedValueOnce({ emails: [email] })
+    mockCreateProposal.mockResolvedValueOnce({
+      id: 'proposal-1', scanRunId: null, userId: 'user-1', system: 'gmail', tier: 2,
+      summary: email.subject, status: 'PENDING', createdAt: '2026-09-21T09:00:00.000Z', updatedAt: '2026-09-21T09:00:00.000Z',
+    })
+    renderModal(gmail)
+
+    await screen.findByText(email.subject)
+    expect(mockCreateProposal).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: /vytvořit proposal z e-mailu revize smlouvy/i }))
+
+    await waitFor(() => expect(mockCreateProposal).toHaveBeenCalledWith({ source: 'gmail', messageId: 'm1' }))
+    expect(screen.getByText('Proposal vytvořena').closest('button')).toBeDisabled()
+  })
+
   it('closes on Escape', async () => {
     mockGmailPreview.mockResolvedValueOnce({ emails: [email] })
     const { onClose } = renderModal(gmail)
@@ -202,10 +226,10 @@ describe('SourcePreviewModal', () => {
 
     renderModal({ ...gmail, id: 'slack', label: 'Slack' })
 
-    expect(await screen.findByText('#dev-team')).toBeInTheDocument()
+    expect(await screen.findAllByText('#dev-team')).toHaveLength(2)
     expect(screen.getByText('@jana')).toBeInTheDocument()
     expect(screen.getByText('Deploy je venku')).toHaveClass('font-semibold')
-    expect(screen.queryByText('Starší zpráva')).not.toBeInTheDocument()
+    expect(screen.getByText('Starší zpráva')).toBeInTheDocument()
     expect(screen.getByText('Deploy je venku').closest('div')?.querySelector('time')).toHaveAttribute(
       'datetime',
       '2023-11-14T22:13:20.100Z',
@@ -213,6 +237,28 @@ describe('SourcePreviewModal', () => {
     expect(screen.getByText('Nepřečteno')).toBeInTheDocument()
     expect(screen.getByText('Reagováno')).toBeInTheDocument()
     expect(screen.getByText('In copy only')).toBeInTheDocument()
+  })
+
+  it('creates a Slack proposal for the selected message identity', async () => {
+    mockSlackPreview.mockResolvedValueOnce({
+      channels: [{
+        channelId: 'C1', channelName: 'dev-team', conversationType: 'channel', messages: [{
+          channelId: 'C1', channelName: 'dev-team', ts: '1700000000.1', userId: 'U1', userName: 'jana',
+          text: 'Deploy je venku', isUnread: true, hasResponded: false, isAddressedToUser: false,
+        }],
+      }],
+    })
+    mockCreateProposal.mockResolvedValueOnce({
+      id: 'proposal-2', scanRunId: null, userId: 'user-1', system: 'slack', tier: 2,
+      summary: 'Deploy je venku', status: 'PENDING', createdAt: '2026-09-21T09:00:00.000Z', updatedAt: '2026-09-21T09:00:00.000Z',
+    })
+    renderModal({ ...gmail, id: 'slack', label: 'Slack' })
+
+    fireEvent.click(await screen.findByRole('button', { name: /vytvořit proposal ze slack zprávy od jana/i }))
+
+    await waitFor(() => expect(mockCreateProposal).toHaveBeenCalledWith({
+      source: 'slack', channelId: 'C1', ts: '1700000000.1',
+    }))
   })
 
   it('marks a Slack preview item as read', async () => {

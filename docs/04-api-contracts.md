@@ -81,6 +81,29 @@ POST /api/v1/proposals/:id/reject
 
 Rejects proposal.
 
+POST /api/v1/proposals/from-source-message
+
+Creates a pending `MESSAGE_REPLY` proposal only after the user explicitly
+selects **Vytvořit proposal** for a Gmail or Slack preview message. The desktop
+must send identifiers only; it must not send the message content.
+
+Gmail request:
+```json
+{ "source": "gmail", "messageId": "gmail-message-id" }
+```
+
+Slack request:
+```json
+{ "source": "slack", "channelId": "C123", "ts": "1700000000.100000" }
+```
+
+The backend authenticates the user, reloads the requested message through that
+user's connector, and returns `201` with the full created proposal. It stores
+all available source metadata and a message snapshot, but performs no LLM call,
+sends no reply, and does not mark the source message read. Repeating a request
+for the same pending source message returns the existing proposal. Later draft
+generation remains available through `POST /api/v1/proposals/:id/regenerate-draft`.
+
 7. Connector APIs
 GET /api/v1/connectors
 
@@ -124,6 +147,36 @@ log,
 proposal,
 completed,
 error.
+
+The `completed` event contains a diagnostic summary suitable for direct UI
+rendering. Counts contain no message content or connector credentials.
+
+```json
+{
+  "type": "completed",
+  "scanRunId": "scan-id",
+  "summary": {
+    "tierCounts": { "1": 4, "2": 3, "3": 20 },
+    "totalItems": 27,
+    "proposalCount": 2,
+    "proposalCountsBySource": { "gmail": 1, "slack": 1 },
+    "deduplicatedCount": 5,
+    "relevanceFilteredCount": 2,
+    "relevanceRejected": { "not_addressed": 2 },
+    "sourceErrors": {},
+    "sources": { "gmail": 30, "slack": 50, "calendar": 4 }
+  }
+}
+```
+
+`proposalCount` counts proposals successfully persisted by this scan.
+`deduplicatedCount` includes items merged into or covered by an existing
+pending proposal and duplicate topics within the current scan.
+`relevanceFilteredCount` counts actionable AI classifications rejected by the
+deterministic relevance policy. `sourceErrors` contains per-connector errors
+without message content. The same fields are returned in the completed
+`GET /api/v1/scan/status` snapshot. Older stored scans may omit the extended
+fields.
 
 GET /api/v1/scan/status
 

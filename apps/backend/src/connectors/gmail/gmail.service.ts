@@ -25,10 +25,12 @@ import {
 
 const GMAIL_THREADS_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/threads'
 const GMAIL_MESSAGES_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages'
+const GMAIL_INBOX_LABEL_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/labels/INBOX'
+const GMAIL_PROFILE_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/profile'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 
 export interface GmailUnreadResult {
-  /** Unread inbox thread count (estimate from Gmail API). */
+  /** Unread inbox message count from Gmail's INBOX label. */
   unreadCount: number
   /** External Gmail address (if available from the credential record). */
   externalAccountId?: string
@@ -170,7 +172,7 @@ export class GmailService {
   ) {}
 
   /**
-   * Return the unread inbox thread count for the given user.
+   * Return the unread inbox message count for the given user.
    *
    * @throws CredentialNotFoundException  when no Gmail credential exists
    * @throws CredentialExpiredException   when the credential has expired and refresh fails
@@ -210,11 +212,7 @@ export class GmailService {
   // ─── Private helpers ────────────────────────────────────────────────────────
 
   private async fetchUnreadCount(accessToken: string): Promise<number> {
-    const url = new URL(GMAIL_THREADS_URL)
-    url.searchParams.set('q', 'in:inbox is:unread')
-    url.searchParams.set('maxResults', '500')
-
-    const response = await fetch(url.toString(), {
+    const response = await fetch(GMAIL_INBOX_LABEL_URL, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/json',
@@ -231,12 +229,10 @@ export class GmailService {
     }
 
     const data = (await response.json()) as {
-      resultSizeEstimate?: number
-      threads?: unknown[]
+      messagesUnread?: number
     }
 
-    // Use resultSizeEstimate if no threads array returned (empty inbox = 0)
-    return data.resultSizeEstimate ?? data.threads?.length ?? 0
+    return data.messagesUnread ?? 0
   }
 
   /**
@@ -390,11 +386,13 @@ export class GmailService {
     const tokens = await this.credentials.getTokens(userId, ConnectorType.GMAIL)
     let accessToken = tokens.accessToken
     const meta = await this.credentials.getMetadata(userId, ConnectorType.GMAIL)
-    const externalAccountId = meta.externalAccountId ?? undefined
 
     if (this.isNearExpiry(meta.tokenExpiresAt)) {
       accessToken = await this.refreshAccessToken(userId, tokens.refreshToken)
     }
+
+    const externalAccountId = meta.externalAccountId?.trim()
+      || await this.fetchAccountEmail(accessToken)
 
     try {
       return await this.doFetchScanEmails(accessToken, maxResults, externalAccountId)
@@ -404,6 +402,25 @@ export class GmailService {
         return await this.doFetchScanEmails(accessToken, maxResults, externalAccountId)
       }
       throw err
+    }
+  }
+
+  private async fetchAccountEmail(accessToken: string): Promise<string | undefined> {
+    try {
+      const response = await fetch(GMAIL_PROFILE_URL, {
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+      })
+      if (!response.ok) {
+        this.logger.warn(`Gmail profile API returned ${response.status}; recipient role will be unknown`)
+        return undefined
+      }
+      const profile = (await response.json()) as { emailAddress?: string }
+      return profile.emailAddress?.trim() || undefined
+    } catch (err: unknown) {
+      this.logger.warn(
+        `Gmail profile lookup failed; recipient role will be unknown: ${err instanceof Error ? err.message : String(err)}`,
+      )
+      return undefined
     }
   }
 
@@ -423,7 +440,8 @@ export class GmailService {
         accessToken,
         maxResults,
         externalAccountId,
-        'in:inbox -in:spam -in:trash -from:me',
+        'in:inbox -in:spam -in:trash',
+        false,
       )
     } catch (err: unknown) {
       if (isHttpUnauthorized(err)) {
@@ -432,7 +450,8 @@ export class GmailService {
           accessToken,
           maxResults,
           externalAccountId,
-          'in:inbox -in:spam -in:trash -from:me',
+          'in:inbox -in:spam -in:trash',
+          false,
         )
       }
       throw err
@@ -481,6 +500,7 @@ export class GmailService {
     maxResults: number,
     externalAccountId: string | undefined,
     query: string,
+    excludeMessagesFromConnectedAccount = true,
   ): Promise<GmailScanEmail[]> {
     const listUrl = new URL(GMAIL_MESSAGES_URL)
     listUrl.searchParams.set('q', query)
@@ -503,7 +523,8 @@ export class GmailService {
     )
     return emails.filter(
       (email): email is GmailScanEmail =>
-        email !== null && !isSameEmailAddress(email.from, externalAccountId),
+        email !== null &&
+        (!excludeMessagesFromConnectedAccount || !isSameEmailAddress(email.from, externalAccountId)),
     )
   }
 

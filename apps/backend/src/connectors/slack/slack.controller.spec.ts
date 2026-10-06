@@ -86,11 +86,13 @@ describe('SlackController', () => {
       expect(slack.fetchScanMessages).toHaveBeenCalledWith('user-1', true)
       expect(result.data).not.toHaveProperty('answeredMessages')
       expect(result.data.channels).toHaveLength(1)
-      expect(result.data.channels[0].messages).toHaveLength(1)
-      expect(result.data.channels[0].messages[0].userName).toBe('jana')
-      expect(result.data.channels[0].messages[0].isUnread).toBe(false)
-      expect(result.data.channels[0].messages[0].hasResponded).toBe(true)
-      expect(result.data.channels[0].messages[0].isAddressedToUser).toBe(false)
+      expect(result.data.channels[0].messages).toHaveLength(2)
+      expect(result.data.channels[0].messages[0]).toEqual(expect.objectContaining({
+        userName: 'petr', isUnread: true, hasResponded: false, isAddressedToUser: false,
+      }))
+      expect(result.data.channels[0].messages[1]).toEqual(expect.objectContaining({
+        userName: 'jana', isUnread: false, hasResponded: true, isAddressedToUser: false,
+      }))
     })
 
     it('reports a provider failure in the envelope instead of throwing', async () => {

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -12,6 +13,7 @@ import {
 } from '@nestjs/common'
 import { ProposalStatus } from '@prisma/client'
 import { CurrentUser, CurrentUserData } from '../auth/current-user.decorator'
+import { CreateProposalFromSourceMessageDto } from './dto/create-proposal-from-source-message.dto'
 import { ProposalsService, type MarkReadResult } from './proposals.service'
 
 @Controller('proposals')
@@ -44,6 +46,41 @@ export class ProposalsController {
     const parsedStatus = status ? (status.toUpperCase() as ProposalStatus) : undefined
     const items = await this.proposals.list(userId, parsedStatus)
     return { success: true, data: { proposals: items } }
+  }
+
+  /**
+   * POST /api/v1/proposals/from-source-message
+   * Creates a proposal only after an explicit user action. The backend reloads
+   * the connector message itself, so message content is never trusted from the
+   * desktop client.
+   */
+  @Post('from-source-message')
+  @HttpCode(HttpStatus.CREATED)
+  async createFromSourceMessage(
+    @CurrentUser() user: CurrentUserData,
+    @Body() body: CreateProposalFromSourceMessageDto,
+  ) {
+    const userId = this.resolveUserId(user, 'create-from-source-message')
+    if (body.source === 'gmail') {
+      if (!body.messageId || body.channelId !== undefined || body.ts !== undefined) {
+        throw new BadRequestException('Gmail requests require only messageId')
+      }
+      const proposal = await this.proposals.createFromSourceMessage(userId, {
+        source: 'gmail',
+        messageId: body.messageId,
+      })
+      return { success: true, data: { proposal } }
+    }
+
+    if (!body.channelId || !body.ts || body.messageId !== undefined) {
+      throw new BadRequestException('Slack requests require only channelId and ts')
+    }
+    const proposal = await this.proposals.createFromSourceMessage(userId, {
+      source: 'slack',
+      channelId: body.channelId,
+      ts: body.ts,
+    })
+    return { success: true, data: { proposal } }
   }
 
   /**

@@ -44,8 +44,12 @@ function parseOriginalMessage(msg: string) {
   const channelMatch = msg.match(/^Channel: #(.+)$/m)
   const authorMatch = msg.match(/^Author: @(.+)$/m)
   const dateMatch = msg.match(/^Date: (.+)$/m)
-  const rawDate = dateMatch?.[1]?.trim()
-  const date = formatSourceDate(rawDate)
+  const timestampMatch = msg.match(/^Timestamp: (.+)$/m)
+  const rawTimestamp = timestampMatch?.[1]?.trim()
+  const timestampDate = rawTimestamp && Number.isFinite(Number(rawTimestamp))
+    ? new Date(Number(rawTimestamp) * 1000).toISOString()
+    : undefined
+  const date = formatSourceDate(dateMatch?.[1]?.trim() || timestampDate)
   const rawFrom = fromMatch?.[1]?.trim() ?? ''
   const fromNameMatch = rawFrom.match(/^(.+?)\s*<[^>]+>$/)
   const fromEmailMatch = rawFrom.match(/<([^>]+)>$/) ?? rawFrom.match(/^([^\s]+@[^\s]+)$/)
@@ -474,6 +478,11 @@ export function ProposalCard({ proposal, onRemove, onStatusChange, isExpanded = 
               <span className="text-xs font-medium uppercase tracking-wider text-orange-300">
                 Tier {proposal.tier} · Google Docs · {proposal.sourceMessageIds?.length ?? 1} komentářů
               </span>
+              {sourceDate && (
+                <span className="block text-xs text-gray-500">
+                  {sourceDateLabel}: {sourceDate}
+                </span>
+              )}
               <p className="font-bold text-gray-100 mt-1">{proposal.summary}</p>
               {proposal.detail && (
                 <p className="text-sm text-gray-300 mt-2 whitespace-pre-wrap">{proposal.detail}</p>

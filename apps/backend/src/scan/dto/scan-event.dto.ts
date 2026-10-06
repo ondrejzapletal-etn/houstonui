@@ -63,6 +63,11 @@ export interface ScanCompletedEvent {
     totalItems: number
     proposalCount: number
     sources: Record<string, number>
+    proposalCountsBySource: Record<string, number>
+    deduplicatedCount: number
+    relevanceFilteredCount: number
+    relevanceRejected: Record<string, number>
+    sourceErrors: Record<string, string>
   }
 }
 

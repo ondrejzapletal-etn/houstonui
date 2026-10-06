@@ -36,6 +36,14 @@ const gmailConnector: ConnectorInfo = {
   lastCheckedAt: '2026-05-07T10:00:00.000Z',
 }
 
+const slackConnector: ConnectorInfo = {
+  id: 'slack',
+  label: 'Slack',
+  status: 'connected',
+  unreadCount: 3,
+  lastCheckedAt: '2026-05-07T10:00:00.000Z',
+}
+
 const slackExpired: ConnectorInfo = {
   id: 'slack',
   label: 'Slack',
@@ -102,13 +110,34 @@ describe('SourcesSection', () => {
     expect(screen.getByText('Slack')).toBeInTheDocument()
   })
 
-  it('shows unread count badge for connected connector', async () => {
-    mockFetchConnectors.mockResolvedValueOnce({ connectors: [gmailConnector] })
+  it('shows unread count inside the green indicator only for Gmail and Slack', async () => {
+    const jiraConnector: ConnectorInfo = {
+      id: 'jira',
+      label: 'Jira',
+      status: 'connected',
+      unreadCount: 5,
+      lastCheckedAt: '2026-05-07T10:00:00.000Z',
+    }
+    const clockifyConnector: ConnectorInfo = {
+      id: 'clockify',
+      label: 'Clockify',
+      status: 'connected',
+      unreadCount: null,
+      lastCheckedAt: '2026-05-07T10:00:00.000Z',
+    }
+    mockFetchConnectors.mockResolvedValueOnce({
+      connectors: [gmailConnector, slackConnector, jiraConnector, clockifyConnector],
+    })
     renderInProviders()
 
     await waitFor(() => screen.getByText('Gmail'))
-    // sr-only text "7 unread"
-    expect(screen.getByText('7 unread')).toBeInTheDocument()
+    expect(screen.getByTestId('unread-indicator-gmail')).toHaveTextContent('7')
+    expect(screen.getByTestId('unread-indicator-slack')).toHaveTextContent('3')
+    expect(screen.queryByTestId('unread-indicator-jira')).not.toBeInTheDocument()
+    expect(screen.getByTestId('connected-indicator-jira')).toHaveAccessibleName('Connected')
+    expect(screen.getByTestId('connected-indicator-clockify')).toHaveAccessibleName('Connected')
+    expect(screen.queryByTestId('connected-indicator-gmail')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('connected-indicator-slack')).not.toBeInTheDocument()
   })
 
   it('shows Re-authorise badge for token_expired connector', async () => {

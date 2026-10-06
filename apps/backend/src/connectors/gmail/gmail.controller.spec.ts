@@ -85,7 +85,7 @@ describe('GmailController', () => {
 
       const result = await controller.preview(user)
 
-      expect(gmail.fetchPreviewEmails).toHaveBeenCalledWith('user-1', 30)
+      expect(gmail.fetchPreviewEmails).toHaveBeenCalledWith('user-1', 100)
       expect(result).toEqual({
         success: true,
         data: {

@@ -52,6 +52,20 @@ describe('ProposalCard', () => {
     expect(screen.getByText(`Odesláno: ${formatDate(sourceOccurredAt)}`)).toBeInTheDocument()
   })
 
+  it('uses a native Slack timestamp when older proposals lack a Date header', () => {
+    const slackTimestamp = '1788186600.000000'
+    const sourceOccurredAt = new Date(Number(slackTimestamp) * 1000).toISOString()
+    renderProposal({
+      id: 'proposal-legacy-slack',
+      system: 'slack',
+      tier: 1,
+      summary: 'Reply in channel',
+      originalMessage: `Channel: #team\nTimestamp: ${slackTimestamp}\n---\nPlease reply`,
+    }, true)
+
+    expect(screen.getByText(`Odesláno: ${formatDate(sourceOccurredAt)}`)).toBeInTheDocument()
+  })
+
   it('renders a proposal with a persisted READ status as resolved', () => {
     renderProposal({
       id: 'proposal-3',
@@ -119,6 +133,7 @@ describe('ProposalCard', () => {
   })
 
   it('renders document reviews without Gmail reply controls and resolves explicitly', async () => {
+    const sourceOccurredAt = '2026-08-31T14:30:00.000Z'
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ success: true, data: { source: 'gmail' } }),
@@ -133,8 +148,10 @@ describe('ProposalCard', () => {
       detail: '1. Prosím zkontroluj vysvětlení obrázku.',
       url: 'https://docs.google.com/document/d/document-1',
       sourceMessageIds: ['docs-1', 'docs-2'],
+      sourceOccurredAt,
     }, true)
 
+    expect(screen.getByText(`Přijato: ${formatDate(sourceOccurredAt)}`)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Odpovědět' })).not.toBeInTheDocument()
     expect(screen.queryByText('Návrh odpovědi:')).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Otevřít dokument ↗' })).toHaveAttribute(

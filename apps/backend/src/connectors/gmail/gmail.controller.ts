@@ -36,7 +36,7 @@ interface SourcePreviewEmail {
 }
 
 /** Max emails rendered in the preview modal. */
-const PREVIEW_EMAIL_LIMIT = 30
+const PREVIEW_EMAIL_LIMIT = 100
 
 function toPreviewEmail(email: GmailScanEmail): SourcePreviewEmail {
   return {

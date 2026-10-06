@@ -25,6 +25,10 @@ import { TimeSavedService } from '../users/time-saved.service'
 
 const JIRA_ISSUE_KEY_RE = /^[A-Z][A-Z0-9_]*-\d+$/
 
+type CreateProposalFromSourceMessageRequest =
+  | { source: 'gmail'; messageId: string }
+  | { source: 'slack'; channelId: string; ts: string }
+
 export interface MarkReadResult {
   status: 'READ'
   source: 'gmail' | 'slack'
@@ -89,6 +93,125 @@ export class ProposalsService {
         updatedAt: true,
       },
     })
+  }
+
+  async createFromSourceMessage(
+    userId: string,
+    request: CreateProposalFromSourceMessageRequest,
+  ) {
+    const source = await this.getSourceMessage(userId, request)
+    const existing = await this.prisma.proposal.findFirst({
+      where: {
+        userId,
+        system: source.system,
+        externalId: source.externalId,
+        status: ProposalStatus.PENDING,
+      },
+    })
+    if (existing) return existing
+
+    const proposal = await this.prisma.proposal.create({
+      data: {
+        scanRunId: null,
+        userId,
+        system: source.system,
+        kind: ProposalKind.MESSAGE_REPLY,
+        tier: 1,
+        summary: source.summary,
+        detail: source.detail,
+        draft: null,
+        url: source.url,
+        externalId: source.externalId,
+        sourceMessageIds: [source.externalId],
+        status: ProposalStatus.PENDING,
+        confidence: null,
+        risk: null,
+        originalMessage: source.originalMessage,
+        sourceOccurredAt: source.occurredAt,
+      },
+    })
+    this.audit.log('proposal.created_from_source_message', {
+      userId,
+      connectorType: source.system,
+      metadata: { proposalId: proposal.id, externalId: source.externalId },
+    })
+    return proposal
+  }
+
+  private async getSourceMessage(
+    userId: string,
+    request: CreateProposalFromSourceMessageRequest,
+  ): Promise<{
+    system: 'gmail' | 'slack'
+    externalId: string
+    summary: string
+    detail: string
+    url: string | null
+    originalMessage: string
+    occurredAt: Date | null
+  }> {
+    if (request.source === 'gmail') {
+      const emails = await this.gmail.fetchPreviewEmails(userId)
+      const email = emails.find((item) => item.messageId === request.messageId)
+      if (!email) throw new NotFoundException('Gmail message is no longer available')
+
+      const receivedAt = new Date(email.receivedAt)
+      return {
+        system: 'gmail',
+        externalId: email.messageId,
+        summary: email.subject || '(bez předmětu)',
+        detail: email.from || 'Neznámý odesílatel',
+        url: `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(email.messageId)}`,
+        originalMessage: [
+          `Message-ID: ${email.messageId}`,
+          email.threadId ? `Thread-ID: ${email.threadId}` : '',
+          `From: ${email.from}`,
+          email.to ? `To: ${email.to}` : '',
+          email.cc ? `CC: ${email.cc}` : '',
+          `Subject: ${email.subject}`,
+          `Date: ${email.receivedAt}`,
+          email.labels.length > 0 ? `Labels: ${email.labels.join(', ')}` : '',
+          `Snippet: ${email.snippet}`,
+          '---',
+          email.body || email.snippet,
+        ].filter(Boolean).join('\n'),
+        occurredAt: Number.isNaN(receivedAt.getTime()) ? null : receivedAt,
+      }
+    }
+
+    const { channels, answeredMessages } = await this.slack.fetchScanMessages(userId, true)
+    const channel = channels.find((item) => item.channelId === request.channelId)
+    const message = channel?.messages.find((item) => item.ts === request.ts)
+    if (!channel || !message) throw new NotFoundException('Slack message is no longer available')
+
+    const occurredAt = new Date(Number(message.ts) * 1000)
+    const externalId = `${channel.channelId}:${message.ts}`
+    const hasResponded = answeredMessages.some(
+      (item) => item.channelId === channel.channelId && item.ts === message.ts,
+    )
+    const conversationType = channel.conversationType ?? 'channel'
+    return {
+      system: 'slack',
+      externalId,
+      summary: message.text.slice(0, 160) || `Zpráva v #${channel.channelName}`,
+      detail: `${conversationType === 'channel' ? '#' : '@'}${channel.channelName} | @${message.userName || message.userId}`,
+      url: null,
+      originalMessage: [
+        `Channel: ${conversationType === 'channel' ? '#' : '@'}${channel.channelName}`,
+        `Channel-ID: ${channel.channelId}`,
+        `Conversation type: ${conversationType}`,
+        `Author: @${message.userName || message.userId}`,
+        `Author-ID: ${message.userId}`,
+        `Timestamp: ${message.ts}`,
+        message.threadTs ? `Thread timestamp: ${message.threadTs}` : '',
+        `Unread: ${message.isUnread === true ? 'yes' : 'no'}`,
+        `Responded: ${hasResponded ? 'yes' : 'no'}`,
+        `Mentioned current user: ${message.mentionsCurrentUser === true ? 'yes' : 'no'}`,
+        '---',
+        message.text,
+      ].filter(Boolean).join('\n'),
+      occurredAt: Number.isNaN(occurredAt.getTime()) ? null : occurredAt,
+    }
   }
 
   async approve(proposalId: string, userId: string, draft?: string) {

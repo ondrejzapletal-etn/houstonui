@@ -57,24 +57,14 @@ function ConnectorCard(props: ConnectorCardProps) {
   // Pokud je gmail, zobrazíme i kalendářovou ikonu
   const isGmail = id === 'gmail';
   const isUsable = status === 'connected' || status === 'warning';
+  const showsUnreadIndicator = isUsable && unreadCount !== null && (id === 'gmail' || id === 'slack')
+  const showsConnectedIndicator = isUsable && (id === 'jira' || id === 'clockify')
 
   const formattedTime = lastCheckedAt
     ? new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(
         new Date(lastCheckedAt),
       )
     : null;
-
-  // Indikace stavu: malé kolečko vedle názvu
-  const statusColor =
-    status === 'connected'
-      ? 'bg-green-500'
-      : status === 'warning'
-        ? 'bg-amber-500'
-      : status === 'token_expired'
-        ? 'bg-amber-500'
-        : status === 'error'
-          ? 'bg-red-500'
-          : 'bg-gray-500';
 
   // Dropdown menu for actions
   const [menuOpen, setMenuOpen] = useLocalState(false);
@@ -147,41 +137,29 @@ function ConnectorCard(props: ConnectorCardProps) {
                 <path fill="currentColor" d="M12 3 2 21h20L12 3Z" />
                 <path fill="black" d="M11 9h2v6h-2zm0 8h2v2h-2z" />
               </svg>
-            ) : (
-              <span
-                className={`inline-block w-2.5 h-2.5 rounded-full ml-2 ${statusColor}`}
-                aria-label={
-                  status === 'connected'
-                    ? 'Connected'
-                    : status === 'token_expired'
-                      ? 'Token expired'
-                      : status === 'error'
-                        ? 'Error'
-                        : 'Not connected'
-                }
-                title={
-                  status === 'connected'
-                    ? 'Connected'
-                    : status === 'token_expired'
-                      ? 'Token expired'
-                      : status === 'error'
-                        ? 'Error'
-                        : 'Not connected'
-                }
-              />
-            )}
+            ) : null}
           </span>
         </div>
 
-        {isUsable && unreadCount !== null && (
+        {showsUnreadIndicator && (
           <span
-            className="rounded-full bg-green-400 px-2 py-0.5 text-xs font-bold text-gray-900 border border-green-600"
+            className="flex h-5 min-w-5 items-center justify-center rounded-full border border-green-600 bg-green-400 px-1 text-xs font-bold text-gray-900"
             role="status"
             title={`${unreadCount} unread`}
+            data-testid={`unread-indicator-${id}`}
           >
             <span className="sr-only">{unreadCount} unread</span>
             <span aria-hidden="true">{unreadCount}</span>
           </span>
+        )}
+
+        {showsConnectedIndicator && (
+          <span
+            className="h-3 w-3 rounded-full border border-green-600 bg-green-400"
+            role="status"
+            aria-label="Connected"
+            data-testid={`connected-indicator-${id}`}
+          />
         )}
 
         {status === 'not_connected' && <span className="text-xs text-gray-400">Not connected</span>}

@@ -25,6 +25,7 @@ import { isPotentialGoogleDocsCommentNotification } from '../connectors/gmail/go
 import { KnowledgeIngestionService } from '../knowledge/knowledge-ingestion.service'
 import { KnowledgeService } from '../knowledge/knowledge.service'
 import { evaluateProposalRelevance } from './scan-relevance.policy'
+import type { RelevanceRejectionReason } from './scan-relevance.policy'
 import type {
   ScanEvent,
   ScanProgressEvent,
@@ -44,6 +45,11 @@ interface ScanSummary {
   totalItems: number
   proposalCount: number
   sources: Record<string, number>
+  proposalCountsBySource?: Record<string, number>
+  deduplicatedCount?: number
+  relevanceFilteredCount?: number
+  relevanceRejected?: Record<string, number>
+  sourceErrors?: Record<string, string>
 }
 
 export interface ScanStatusSnapshot {
@@ -271,10 +277,18 @@ export class ScanService {
       clientIds: new Set(knownClients.map((client) => client.id)),
     }
     const classifiedActionableItems = classification.items.filter((item) => item.tier <= 2)
-    const actionableItems = classifiedActionableItems.filter((item) =>
-      evaluateProposalRelevance(item, sourceData, relevanceOptions).allowed,
-    )
+    const relevanceRejected: Partial<Record<RelevanceRejectionReason, number>> = {}
+    const actionableItems = classifiedActionableItems.filter((item) => {
+      const decision = evaluateProposalRelevance(item, sourceData, relevanceOptions)
+      if (!decision.allowed && decision.reason) {
+        relevanceRejected[decision.reason] = (relevanceRejected[decision.reason] ?? 0) + 1
+      }
+      return decision.allowed
+    })
     const relevanceFilteredCount = classifiedActionableItems.length - actionableItems.length
+    if (relevanceFilteredCount > 0) {
+      this.logger.log(`Relevance filtered ${relevanceFilteredCount} items: ${JSON.stringify(relevanceRejected)}`)
+    }
     const pendingById = new Map(activePendingProposals.map((proposal) => [proposal.id, proposal]))
     const pendingByTopic = new Map(
       activePendingProposals
@@ -339,6 +353,7 @@ export class ScanService {
 
     const proposalsToSave = [...uniqueItems.values(), ...itemsWithoutTopic]
     const savedProposals: string[] = []
+    const proposalCountsBySource: Record<string, number> = {}
 
     // Pre-fetch projects by jiraProjectKey to avoid N+1 queries inside the loop
     const allProjects = await this.prisma.project.findMany({
@@ -412,6 +427,7 @@ export class ScanService {
         })
 
         savedProposals.push(proposal.id)
+  proposalCountsBySource[proposal.system] = (proposalCountsBySource[proposal.system] ?? 0) + 1
 
         const proposalEvent: ScanProposalEvent = {
           type: 'proposal',
@@ -485,6 +501,15 @@ export class ScanService {
       jiraSecsToday,
       clockifySecsToday,
     }
+    const sourceErrors = Object.fromEntries(
+      [
+        ['gmail', sourceData.gmail.error],
+        ['slack', sourceData.slack.error],
+        ['calendar', sourceData.calendar.error],
+        ['jira', sourceData.jiraToday.error],
+        ['clockify', sourceData.clockify.error],
+      ].filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    )
 
     await this.prisma.scanRun.update({
       where: { id: scanRun.id },
@@ -497,8 +522,11 @@ export class ScanService {
           tierCounts: classification.tierCounts,
           totalItems: classification.totalItems,
           proposalCount: savedProposals.length,
+          proposalCountsBySource,
           deduplicatedCount,
           relevanceFilteredCount,
+          relevanceRejected,
+          sourceErrors,
           autoReadSuggestions: autoReadItems.map((item) => ({
             messageId: item.messageId,
             subject: item.subject,
@@ -537,6 +565,11 @@ export class ScanService {
         totalItems: classification.totalItems,
         proposalCount: savedProposals.length,
         sources: sourceCounts,
+        proposalCountsBySource,
+        deduplicatedCount,
+        relevanceFilteredCount,
+        relevanceRejected,
+        sourceErrors,
       },
     }
     yield completedEvent
@@ -672,7 +705,37 @@ function summaryFromMetadata(metadata: unknown): ScanSummary | null {
     parsedSources[key] = value
   }
 
-  return { tierCounts: parsedTierCounts, totalItems, proposalCount, sources: parsedSources }
+  return {
+    tierCounts: parsedTierCounts,
+    totalItems,
+    proposalCount,
+    sources: parsedSources,
+    proposalCountsBySource: parseNumberRecord(metadata.proposalCountsBySource),
+    deduplicatedCount: optionalNumber(metadata.deduplicatedCount),
+    relevanceFilteredCount: optionalNumber(metadata.relevanceFilteredCount),
+    relevanceRejected: parseNumberRecord(metadata.relevanceRejected),
+    sourceErrors: parseStringRecord(metadata.sourceErrors),
+  }
+}
+
+function parseNumberRecord(value: unknown): Record<string, number> | undefined {
+  if (!isRecord(value)) return undefined
+  const entries = Object.entries(value)
+  return entries.every((entry) => typeof entry[1] === 'number')
+    ? Object.fromEntries(entries) as Record<string, number>
+    : undefined
+}
+
+function parseStringRecord(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) return undefined
+  const entries = Object.entries(value)
+  return entries.every((entry) => typeof entry[1] === 'string')
+    ? Object.fromEntries(entries) as Record<string, string>
+    : undefined
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined
 }
 
 function autoReadSuggestionsFromMetadata(metadata: unknown): AutoReadSuggestionItem[] {

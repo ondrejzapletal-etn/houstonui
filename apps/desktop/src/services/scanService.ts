@@ -341,7 +341,32 @@ function parseSummary(value: unknown): ScanSummary | null {
   if (value === null) return null
   if (!isRecord(value) || !isNumberRecord(value.tierCounts) || !isNumberRecord(value.sources)) return null
   if (typeof value.totalItems !== 'number' || typeof value.proposalCount !== 'number') return null
-  return { tierCounts: value.tierCounts, totalItems: value.totalItems, proposalCount: value.proposalCount, sources: value.sources }
+  return {
+    tierCounts: value.tierCounts,
+    totalItems: value.totalItems,
+    proposalCount: value.proposalCount,
+    sources: value.sources,
+    proposalCountsBySource: optionalNumberRecord(value.proposalCountsBySource),
+    deduplicatedCount: optionalNumber(value.deduplicatedCount),
+    relevanceFilteredCount: optionalNumber(value.relevanceFilteredCount),
+    relevanceRejected: optionalNumberRecord(value.relevanceRejected),
+    sourceErrors: optionalStringRecord(value.sourceErrors),
+  }
+}
+
+function optionalNumberRecord(value: unknown): Record<string, number> | undefined {
+  return value === undefined || isNumberRecord(value) ? value : undefined
+}
+
+function optionalStringRecord(value: unknown): Record<string, string> | undefined {
+  if (value === undefined) return undefined
+  return isRecord(value) && Object.values(value).every((entry) => typeof entry === 'string')
+    ? value as Record<string, string>
+    : undefined
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined
 }
 
 function isScanProposalData(value: unknown): value is ScanProposalData {

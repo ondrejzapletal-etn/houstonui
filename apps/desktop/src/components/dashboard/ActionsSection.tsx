@@ -1,14 +1,23 @@
 import { useEffect, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSettingsStore } from '../../store/settingsStore'
+import { useAuthStore } from '../../store/authStore'
 import { useScanStream, loadLastScan, type LastScanResult, type AutoReadSuggestionItem } from '../../services/scanService'
 import { ProposalCard } from './ProposalCard'
 import { ScanRocketProgressBar } from './ScanRocketProgressBar'
 import AutoReadModal from './AutoReadModal'
 import TaskModal from './TaskModal'
 import type { ScanProposalData, Proposal } from '@houston/shared-types'
+import type { ScanSummary } from '@houston/shared-types'
 import logoIcon from '../img/logo.webp'
-import { fetchProposals, batchMarkRead } from '../../services/proposalsApi'
+import {
+  fetchProposals,
+  batchMarkRead,
+  PROPOSAL_CREATED_EVENT,
+  PROPOSALS_QUERY_KEY,
+} from '../../services/proposalsApi'
+
+const PROPOSALS_PER_PAGE = 10
 
 function formatScanCompletedAt(completedAt: string): string {
   const date = new Date(completedAt)
@@ -17,10 +26,80 @@ function formatScanCompletedAt(completedAt: string): string {
   return `${date.getHours()}:${minutes} ${date.getDate()}.${date.getMonth() + 1}.${date.getFullYear()}`
 }
 
+function createdAtTimestamp(proposal: ScanProposalData | Proposal): number {
+  if (!('createdAt' in proposal) || !proposal.createdAt) return 0
+  const timestamp = new Date(proposal.createdAt).getTime()
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function isManualProposal(proposal: ScanProposalData | Proposal): boolean {
+  return 'scanRunId' in proposal && proposal.scanRunId === null
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  gmail: 'Gmail',
+  slack: 'Slack',
+  calendar: 'Kalendář',
+  jira: 'Jira',
+  clockify: 'Clockify',
+}
+
+const REJECTION_LABELS: Record<string, string> = {
+  missing_source: 'zdroj nenalezen',
+  not_addressed: 'neadresováno uživateli',
+  invalid_client: 'neplatný klient',
+  old_message_unverified: 'stará neověřená zpráva',
+  old_message_resolved: 'již vyřešeno',
+}
+
+function countDetails(counts: Record<string, number> | undefined, labels: Record<string, string>): string {
+  if (!counts) return ''
+  return Object.entries(counts)
+    .filter(([, count]) => count > 0)
+    .map(([key, count]) => `${labels[key] ?? key}: ${count}`)
+    .join(' · ')
+}
+
+function ScanResultSummary({ summary, completedAt }: { summary: ScanSummary; completedAt: string }) {
+  const proposalSources = countDetails(summary.proposalCountsBySource, SOURCE_LABELS)
+  const inputSources = countDetails(
+    Object.fromEntries(
+      Object.entries(summary.sources).filter(([source]) => source === 'gmail' || source === 'slack' || source === 'calendar'),
+    ),
+    SOURCE_LABELS,
+  )
+  const rejectedReasons = countDetails(summary.relevanceRejected, REJECTION_LABELS)
+  const sourceErrors = Object.entries(summary.sourceErrors ?? {})
+
+  return (
+    <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 text-sm" data-testid="scan-result-summary">
+      <p className="text-gray-400">Poslední scan: {formatScanCompletedAt(completedAt)}</p>
+      <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
+        <div><dt className="text-xs text-gray-500">Klasifikováno</dt><dd className="font-semibold text-gray-200">{summary.totalItems}</dd></div>
+        <div><dt className="text-xs text-gray-500">Vytvořeno</dt><dd className="font-semibold text-emerald-300">{summary.proposalCount}</dd></div>
+        <div><dt className="text-xs text-gray-500">Duplicity / sloučeno</dt><dd className="font-semibold text-gray-200">{summary.deduplicatedCount ?? '–'}</dd></div>
+        <div><dt className="text-xs text-gray-500">Odfiltrováno</dt><dd className="font-semibold text-gray-200">{summary.relevanceFilteredCount ?? '–'}</dd></div>
+      </dl>
+      <div className="mt-3 space-y-1 text-xs text-gray-400">
+        {proposalSources && <p><span className="text-gray-500">Vytvořeno podle zdroje:</span> {proposalSources}</p>}
+        {inputSources && <p><span className="text-gray-500">Načtené položky:</span> {inputSources}</p>}
+        <p><span className="text-gray-500">Priority:</span> Tier 1: {summary.tierCounts[1] ?? 0} · Tier 2: {summary.tierCounts[2] ?? 0}</p>
+        {rejectedReasons && <p><span className="text-gray-500">Důvody filtrace:</span> {rejectedReasons}</p>}
+        {sourceErrors.map(([source, error]) => (
+          <p key={source} className="text-red-300"><span className="text-red-400">{SOURCE_LABELS[source] ?? source}:</span> {error}</p>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function ActionsSection() {
   const { scanState, start, stop, clearAutoReadSuggestions, isRestoring } = useScanStream()
   const { language } = useSettingsStore()
+  const accessToken = useAuthStore((state) => state.accessToken)
+  const userId = useAuthStore((state) => state.user?.id)
   const queryClient = useQueryClient()
+  const proposalsQueryKey = [...PROPOSALS_QUERY_KEY, userId] as const
   const { state, phase, message, logs, proposals, autoReadSuggestions, summary, errorMessage } = scanState
 
   // Deklarace isRunning, isIdle hned po získání state
@@ -29,9 +108,15 @@ export default function ActionsSection() {
 
   // Last persisted scan result – shown when idle
   const [lastScan, setLastScan] = useState<LastScanResult | null>(null)
-  // Proposals from API (with status)
-  const [apiProposals, setApiProposals] = useState<Proposal[] | null>(null)
-  const [loadingApi, setLoadingApi] = useState(false)
+  const {
+    data: apiProposals = [],
+    isLoading: isLoadingApi,
+    isError: isApiError,
+  } = useQuery({
+    queryKey: proposalsQueryKey,
+    queryFn: fetchProposals,
+    enabled: Boolean(accessToken && userId),
+  })
 
   const [showTaskModal, setShowTaskModal] = useState(false)
 
@@ -40,31 +125,32 @@ export default function ActionsSection() {
   const [autoReadLoading, setAutoReadLoading] = useState(false)
   const [autoReadError, setAutoReadError] = useState<string | null>(null)
   const [expandedProposals, setExpandedProposals] = useState<Record<string, boolean>>({})
+  const [proposalPage, setProposalPage] = useState(1)
 
   useEffect(() => {
     setLastScan(loadLastScan())
   }, [])
 
-  // On idle, load proposals from API (with status)
   useEffect(() => {
-    if (isIdle) {
-      setLoadingApi(true)
-      fetchProposals()
-        .then((data) => {
-          console.log('API proposals response', data)
-          setApiProposals(data)
-        })
-        .catch(() => setApiProposals(null))
-        .finally(() => setLoadingApi(false))
+    const onProposalCreated = (event: Event) => {
+      const proposal = (event as CustomEvent<Proposal>).detail
+      if (!proposal?.id) return
+      queryClient.setQueryData<Proposal[]>(proposalsQueryKey, (previous = []) =>
+        previous.some((item) => item.id === proposal.id) ? previous : [proposal, ...previous],
+      )
+      setProposalPage(1)
     }
-  }, [isIdle])
+    window.addEventListener(PROPOSAL_CREATED_EVENT, onProposalCreated)
+    return () => window.removeEventListener(PROPOSAL_CREATED_EVENT, onProposalCreated)
+  }, [queryClient, userId])
 
   // After a scan completes, reload persisted result so it shows on next idle
   useEffect(() => {
     if (state === 'completed') {
       setLastScan(loadLastScan())
+      void queryClient.invalidateQueries({ queryKey: PROPOSALS_QUERY_KEY })
     }
-  }, [state])
+  }, [state, queryClient])
 
   // Auto-read suggestions: live during/after scan, from localStorage when idle
   const activeAutoReadSuggestions: AutoReadSuggestionItem[] =
@@ -116,11 +202,12 @@ export default function ActionsSection() {
 
   // Prefer API proposals (with status) when idle, otherwise use live proposals
   // When idle: use lastScan proposals (same set as right after scan) enriched with current status from API
-  const visibleProposals: (ScanProposalData | Proposal)[] = (() => {
+  const pendingProposals: (ScanProposalData | Proposal)[] = (() => {
+    const currentScanProposalIds = new Set(proposals.map((proposal) => proposal.id))
     let base: (ScanProposalData | Proposal)[]
     if (isIdle) {
       const scanProposals = lastScan?.proposals ?? []
-      if (apiProposals && scanProposals.length > 0) {
+      if (scanProposals.length > 0) {
         // Enrich last-scan proposals with up-to-date status from API (matched by id)
         // Keep all scan fields (originalMessage, detectedClient, projectKey, calendarEventId, etc.)
         // because the DB does not persist those — only overlay status.
@@ -135,20 +222,34 @@ export default function ActionsSection() {
           ...apiProposals.filter((p) => !scanIds.has(p.id)),
         ]
       } else {
-        base = apiProposals ?? scanProposals
+        base = apiProposals.length > 0 ? apiProposals : scanProposals
       }
     } else {
-      base = proposals
+      const proposalIds = new Set(proposals.map((proposal) => proposal.id))
+      base = [...proposals, ...apiProposals.filter((proposal) => !proposalIds.has(proposal.id))]
     }
-    return base
-      .sort((a, b) => a.tier - b.tier)
+    return [...base]
+      .sort((a, b) => {
+        const currentScanOrder = Number(currentScanProposalIds.has(b.id)) - Number(currentScanProposalIds.has(a.id))
+        const manualOrder = Number(isManualProposal(b)) - Number(isManualProposal(a))
+        return currentScanOrder || manualOrder || a.tier - b.tier || createdAtTimestamp(b) - createdAtTimestamp(a)
+      })
       // Older locally cached scan results have no status; treat them as PENDING.
       .filter((proposal) => (proposal.status ?? 'PENDING') === 'PENDING')
-      .slice(0, 10)
   })()
+
+  const proposalPageCount = Math.max(1, Math.ceil(pendingProposals.length / PROPOSALS_PER_PAGE))
+  const visibleProposals = pendingProposals.slice(
+    (proposalPage - 1) * PROPOSALS_PER_PAGE,
+    proposalPage * PROPOSALS_PER_PAGE,
+  )
 
   const visibleSummary = state === 'completed' ? summary : null
   const visibleProposalIds = visibleProposals.map((proposal) => proposal.id).join('\n')
+
+  useEffect(() => {
+    setProposalPage((currentPage) => Math.min(currentPage, proposalPageCount))
+  }, [proposalPageCount])
 
   function handleProposalStatusChange(id: string, status: ScanProposalData['status']) {
     setLastScan((previous) => {
@@ -164,9 +265,11 @@ export default function ActionsSection() {
       } catch { /* storage unavailable */ }
       return next
     })
-    setApiProposals((previous) => previous?.map((proposal) =>
-      proposal.id === id ? { ...proposal, status: status as Proposal['status'] } : proposal,
-    ) ?? previous)
+    queryClient.setQueryData<Proposal[]>(proposalsQueryKey, (previous = []) =>
+      previous.map((proposal) =>
+        proposal.id === id ? { ...proposal, status: status as Proposal['status'] } : proposal,
+      ),
+    )
   }
 
   useEffect(() => {
@@ -265,11 +368,7 @@ export default function ActionsSection() {
 
         {/* Completion summary */}
         {visibleSummary && lastScan && (
-          <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 text-gray-500 text-sm">
-            Poslední scan: {formatScanCompletedAt(lastScan.completedAt)} |{' '}
-            {visibleSummary.totalItems} položek klasifikováno |{' '}
-            {visibleSummary.proposalCount} návrhů.
-          </div>
+          <ScanResultSummary summary={visibleSummary} completedAt={lastScan.completedAt} />
         )}
 
         {/* Auto-read button */}
@@ -312,25 +411,54 @@ export default function ActionsSection() {
         )}
 
         {/* Proposals */}
-        {loadingApi && isIdle ? (
+        {isLoadingApi && isIdle ? (
           <div className="text-center text-gray-400 py-8">Načítám návrhy…</div>
-        ) : visibleProposals.length > 0 && (
-          <div className="space-y-6">
-            {visibleProposals.map((p) => (
-              <ProposalCard
-                key={p.id}
-                proposal={p}
-                onStatusChange={(status) => handleProposalStatusChange(p.id, status)}
-                isExpanded={expandedProposals[p.id] ?? false}
-                onToggleExpand={() =>
-                  setExpandedProposals((prev) => ({
-                    ...prev,
-                    [p.id]: !prev[p.id],
-                  }))
-                }
-              />
-            ))}
+        ) : isApiError && visibleProposals.length === 0 ? (
+          <div className="rounded-lg border border-red-800 bg-red-950 p-3 text-red-300 text-sm">
+            Návrhy se nepodařilo načíst. Zkontroluj přihlášení nebo dostupnost backendu.
           </div>
+        ) : visibleProposals.length > 0 && (
+          <>
+            <div className="space-y-6">
+              {visibleProposals.map((p) => (
+                <ProposalCard
+                  key={p.id}
+                  proposal={p}
+                  onStatusChange={(status) => handleProposalStatusChange(p.id, status)}
+                  isExpanded={expandedProposals[p.id] ?? false}
+                  onToggleExpand={() =>
+                    setExpandedProposals((prev) => ({
+                      ...prev,
+                      [p.id]: !prev[p.id],
+                    }))
+                  }
+                />
+              ))}
+            </div>
+            {proposalPageCount > 1 && (
+              <nav aria-label="Stránkování návrhů" className="flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => setProposalPage((page) => Math.max(1, page - 1))}
+                  disabled={proposalPage === 1}
+                  className="button-action local small disabled:opacity-40"
+                >
+                  Předchozí
+                </button>
+                <span className="text-xs text-gray-400">
+                  Stránka {proposalPage} z {proposalPageCount}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setProposalPage((page) => Math.min(proposalPageCount, page + 1))}
+                  disabled={proposalPage === proposalPageCount}
+                  className="button-action local small disabled:opacity-40"
+                >
+                  Další
+                </button>
+              </nav>
+            )}
+          </>
         )}
 
         {/* Empty state */}

@@ -35,19 +35,35 @@ const mockProposal = {
 describe('ProposalsService', () => {
   let service: ProposalsService
   let prisma: {
-    proposal: { findMany: jest.Mock; findUnique: jest.Mock; update: jest.Mock; updateMany: jest.Mock }
+    proposal: {
+      findMany: jest.Mock
+      findFirst: jest.Mock
+      findUnique: jest.Mock
+      create: jest.Mock
+      update: jest.Mock
+      updateMany: jest.Mock
+    }
     user: { findUnique: jest.Mock; update: jest.Mock }
     $transaction: jest.Mock
   }
   let audit: { log: jest.Mock }
-  let gmail: { getMessageDetails: jest.Mock; sendReply: jest.Mock; markMessageAsRead: jest.Mock; markMessagesAsRead: jest.Mock }
-  let slack: { markMessageAsRead: jest.Mock }
+  let gmail: {
+    fetchPreviewEmails: jest.Mock
+    getMessageDetails: jest.Mock
+    sendReply: jest.Mock
+    markMessageAsRead: jest.Mock
+    markMessagesAsRead: jest.Mock
+  }
+  let slack: { fetchScanMessages: jest.Mock; markMessageAsRead: jest.Mock }
+  let ai: { chat: jest.Mock }
 
   beforeEach(async () => {
     prisma = {
       proposal: {
         findMany: jest.fn().mockResolvedValue([mockProposal]),
+        findFirst: jest.fn().mockResolvedValue(null),
         findUnique: jest.fn().mockResolvedValue(mockProposal),
+        create: jest.fn().mockImplementation(async ({ data }) => ({ id: 'manual-1', ...data })),
         update: jest.fn().mockResolvedValue({ ...mockProposal, status: ProposalStatus.APPROVED }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
@@ -59,8 +75,15 @@ describe('ProposalsService', () => {
     }
     prisma.$transaction.mockImplementation(async (callback) => callback({ proposal: prisma.proposal, user: prisma.user }))
     audit = { log: jest.fn() }
-    gmail = { getMessageDetails: jest.fn(), sendReply: jest.fn(), markMessageAsRead: jest.fn(), markMessagesAsRead: jest.fn() }
-    slack = { markMessageAsRead: jest.fn() }
+    gmail = {
+      fetchPreviewEmails: jest.fn(),
+      getMessageDetails: jest.fn(),
+      sendReply: jest.fn(),
+      markMessageAsRead: jest.fn(),
+      markMessagesAsRead: jest.fn(),
+    }
+    slack = { fetchScanMessages: jest.fn(), markMessageAsRead: jest.fn() }
+    ai = { chat: jest.fn() }
 
     const module = await Test.createTestingModule({
       providers: [
@@ -69,8 +92,8 @@ describe('ProposalsService', () => {
         { provide: AuditService, useValue: audit },
         { provide: IssuesService, useValue: { upsertFromKey: jest.fn() } },
         { provide: GmailService, useValue: gmail },
-        { provide: SlackService, useValue: { sendThreadReply: jest.fn(), markMessageAsRead: slack.markMessageAsRead } },
-        { provide: AiGatewayService, useValue: { chat: jest.fn() } },
+        { provide: SlackService, useValue: { sendThreadReply: jest.fn(), ...slack } },
+        { provide: AiGatewayService, useValue: ai },
         { provide: KnowledgeService, useValue: { resolveEntity: jest.fn(), findByExternalLink: jest.fn() } },
         { provide: ClientsService, useValue: { create: jest.fn() } },
         { provide: TimeSavedService, useValue: { record: jest.fn() } },
@@ -87,6 +110,94 @@ describe('ProposalsService', () => {
       select: expect.objectContaining({ sourceOccurredAt: true }),
     }))
     expect(result).toHaveLength(1)
+  })
+
+  it('creates a Gmail proposal from server-fetched source data without AI', async () => {
+    gmail.fetchPreviewEmails.mockResolvedValue([{
+      messageId: 'message-1',
+      threadId: 'thread-1',
+      subject: 'Revize smlouvy',
+      from: 'Pravnik <pravnik@example.com>',
+      to: 'Me <me@example.com>',
+      cc: 'Team <team@example.com>',
+      snippet: 'Posilam revizi.',
+      body: 'Posilam revidovanou smlouvu.',
+      receivedAt: '2026-09-21T08:30:00.000Z',
+      labels: ['UNREAD', 'IMPORTANT'],
+    }])
+    const proposal = await service.createFromSourceMessage('u1', {
+      source: 'gmail',
+      messageId: 'message-1',
+    })
+
+    expect(gmail.fetchPreviewEmails).toHaveBeenCalledWith('u1')
+    expect(prisma.proposal.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        scanRunId: null,
+        system: 'gmail',
+        kind: ProposalKind.MESSAGE_REPLY,
+        tier: 1,
+        externalId: 'message-1',
+        status: ProposalStatus.PENDING,
+        draft: null,
+        originalMessage: expect.stringContaining('Labels: UNREAD, IMPORTANT'),
+      }),
+    }))
+    expect(ai.chat).not.toHaveBeenCalled()
+    expect(audit.log).toHaveBeenCalledWith('proposal.created_from_source_message', expect.objectContaining({
+      userId: 'u1',
+      metadata: expect.objectContaining({ proposalId: 'manual-1', externalId: 'message-1' }),
+    }))
+    expect(proposal.id).toBe('manual-1')
+  })
+
+  it('creates a Slack proposal with channel and message metadata', async () => {
+    slack.fetchScanMessages.mockResolvedValue({
+      channels: [{
+        channelId: 'C1',
+        channelName: 'dev-team',
+        conversationType: 'channel',
+        messages: [{
+          ts: '1700000000.1',
+          userId: 'U1',
+          userName: 'Jana',
+          text: 'Muzete prosim zkontrolovat deploy?',
+          threadTs: '1700000000.1',
+          isUnread: true,
+          mentionsCurrentUser: true,
+        }],
+      }],
+      answeredMessages: [],
+    })
+
+    await service.createFromSourceMessage('u1', {
+      source: 'slack',
+      channelId: 'C1',
+      ts: '1700000000.1',
+    })
+
+    expect(prisma.proposal.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        system: 'slack',
+        externalId: 'C1:1700000000.1',
+        summary: 'Muzete prosim zkontrolovat deploy?',
+        originalMessage: expect.stringContaining('Channel-ID: C1'),
+      }),
+    }))
+  })
+
+  it('returns an existing pending proposal instead of creating a duplicate', async () => {
+    prisma.proposal.findFirst.mockResolvedValueOnce({ ...mockProposal, id: 'existing', externalId: 'message-1' })
+    gmail.fetchPreviewEmails.mockResolvedValue([{
+      messageId: 'message-1', threadId: 'thread-1', subject: 'Subject', from: 'sender@example.com',
+      to: 'me@example.com', cc: '', snippet: '', body: '', receivedAt: '2026-09-21T08:30:00.000Z', labels: [],
+    }])
+
+    const proposal = await service.createFromSourceMessage('u1', { source: 'gmail', messageId: 'message-1' })
+
+    expect(prisma.proposal.create).not.toHaveBeenCalled()
+    expect(audit.log).not.toHaveBeenCalledWith('proposal.created_from_source_message', expect.anything())
+    expect(proposal.id).toBe('existing')
   })
 
   it('approve updates status to APPROVED', async () => {

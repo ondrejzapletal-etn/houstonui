@@ -66,6 +66,11 @@ export interface ScanSummary {
   totalItems: number
   proposalCount: number
   sources: Record<string, number>
+  proposalCountsBySource?: Record<string, number>
+  deduplicatedCount?: number
+  relevanceFilteredCount?: number
+  relevanceRejected?: Record<string, number>
+  sourceErrors?: Record<string, string>
 }
 
 export interface AutoReadSuggestionItem {
@@ -120,12 +125,24 @@ export type ScanEvent =
 // ─── Proposal types ───────────────────────────────────────────────────────────
 
 export interface Proposal extends ScanProposalData {
-  scanRunId: string
+  scanRunId: string | null
   userId: string
   status: ProposalStatus
   createdAt: string
   updatedAt: string
 }
+
+/** Creates a proposal from a connector message without accepting message content from the client. */
+export type CreateProposalFromSourceMessageRequest =
+  | {
+    source: 'gmail'
+    messageId: string
+  }
+  | {
+    source: 'slack'
+    channelId: string
+    ts: string
+  }
 
 export interface ProposalsListResponse {
   proposals: Proposal[]

@@ -123,6 +123,16 @@ describe('ScanService', () => {
     expect(eventTypes).toContain('completed')
     expect(eventTypes).not.toContain('error')
     expect(proposalEvent?.proposal.sourceOccurredAt).toBe(receivedAt)
+    expect(events.find((event) => event.type === 'completed')).toEqual(expect.objectContaining({
+      summary: expect.objectContaining({
+        proposalCount: 1,
+        proposalCountsBySource: { gmail: 1 },
+        deduplicatedCount: 0,
+        relevanceFilteredCount: 0,
+        relevanceRejected: {},
+        sourceErrors: {},
+      }),
+    }))
   })
 
   it('creates ScanRun and Proposal in DB', async () => {
@@ -289,6 +299,57 @@ describe('ScanService', () => {
         reason: 'slack_message_answered',
       },
     })
+  })
+
+  it('records source errors and relevance rejection reasons in scan metadata', async () => {
+    const sourceData = {
+      ...mockSourceData,
+      gmail: { emails: [], error: 'Source timed out' },
+      slack: {
+        result: {
+          channels: [{
+            channelId: 'C1',
+            channelName: 'general',
+            conversationType: 'channel' as const,
+            messages: [{
+              channelId: 'C1',
+              channelName: 'general',
+              ts: String(Date.now() / 1000),
+              userId: 'U2',
+              userName: 'Colleague',
+              text: 'Please review this',
+              mentionsCurrentUser: false,
+            }],
+          }],
+          answeredMessages: [],
+        },
+      },
+    }
+    const fetcher = (service as unknown as { fetcher: { fetchAll: jest.Mock } }).fetcher
+    fetcher.fetchAll.mockResolvedValueOnce(sourceData)
+    classifier.classify.mockResolvedValueOnce({
+      items: [{
+        ...mockClassification.items[0],
+        id: 'slack-C1-message',
+        system: 'slack',
+        externalId: sourceData.slack.result.channels[0].messages[0].ts,
+      }],
+      tierCounts: { 1: 1 },
+      totalItems: 1,
+    })
+
+    for await (const _event of service.runScan('u1')) { /* drain */ }
+
+    expect(prisma.proposal.create).not.toHaveBeenCalled()
+    expect(prisma.scanRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({
+          relevanceFilteredCount: 1,
+          relevanceRejected: { not_addressed: 1 },
+          sourceErrors: { gmail: 'Source timed out' },
+        }),
+      }),
+    }))
   })
 
   it('keeps distinct requested actions about the same project separate', async () => {

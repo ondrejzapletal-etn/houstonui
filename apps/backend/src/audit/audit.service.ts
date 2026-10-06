@@ -28,6 +28,7 @@ export type AuditAction =
   | 'connector.unread.fetch_failed' // Unread count fetch failed
   | 'proposal.approved' // User approved a proposal
   | 'proposal.rejected' // User rejected a proposal
+  | 'proposal.created_from_source_message' // User explicitly created a proposal from Gmail or Slack
   | 'proposal.gmail_reply_sent' // Gmail reply sent after proposal approval
   | 'proposal.slack_reply_sent' // Slack thread reply sent after proposal approval
   | 'proposal.marked_read'      // Source message marked as read without approving
