@@ -9,6 +9,7 @@ import { fetchJiraWorklogStats } from '../../services/connectorsClient'
 import { useTimeSaved } from '../../hooks/useTimeSaved'
 import { TIME_SAVED_KINDS } from '@houston/shared-types'
 import type { TimeSavedBucket, TimeSavedKind } from '@houston/shared-types'
+import InfoTooltip from './InfoTooltip'
 
 function StatItem({ label, value, dim }: { label: string; value: React.ReactNode; dim?: boolean }) {
   return (
@@ -176,7 +177,13 @@ export default function StatsSection() {
 
   return (
     <section>
-      <h2 className="text-xl font-semibold mb-4 uppercase">Statistiky</h2>
+      <div className="mb-4 flex items-center gap-2">
+        <h2 className="text-xl font-semibold uppercase">Statistiky</h2>
+        <InfoTooltip label="Statistiky">
+          Souhrn používání aplikace a odhadované úspory času. Odhad vychází z nastavitelných
+          parametrů, nejde o přímo měřený čas.
+        </InfoTooltip>
+      </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 text-sm">
         <Card>
           <StatItem label="Počet scanů" value={val(scansCount)} />

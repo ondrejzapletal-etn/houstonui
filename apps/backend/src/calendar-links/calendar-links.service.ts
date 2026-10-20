@@ -119,7 +119,15 @@ export class CalendarLinksService {
       select: { issueKey: true, summary: true },
     })
 
-    return { client: { id: client.id, name: client.name }, unknownDomain: null, issues }
+    const issuesWithSummaries = await Promise.all(
+      issues.map(async (issue) => {
+        if (issue.summary.trim()) return issue
+        const summary = await this.issues.refreshSummary(userId, issue.issueKey)
+        return { ...issue, summary: summary ?? '' }
+      }),
+    )
+
+    return { client: { id: client.id, name: client.name }, unknownDomain: null, issues: issuesWithSummaries }
   }
 
   async remove(userId: string, calendarEventId: string) {

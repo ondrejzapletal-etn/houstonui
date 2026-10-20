@@ -24,6 +24,7 @@ import KnowledgeTasksSection from './KnowledgeTasksSection'
 import { useMonthlyWorklogIssues } from '../../hooks/useMonthlyWorklogIssues'
 import { useWorklogsByIssue } from '../../hooks/useWorklogsByIssue'
 import { useHotSpotVacation } from '../../hooks/useHotSpotVacationQuery'
+import InfoTooltip from './InfoTooltip'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -462,12 +463,18 @@ export default function WorklogsSection() {
       <div className=" p-2">
         {/* Heading row */}
         <div className="flex items-center justify-between mb-2">
-          <h2
-            id="worklog-heading"
-            className="text-lg font-bold uppercase tracking-wide"
-          >
-            Výkazy
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2
+              id="worklog-heading"
+              className="text-lg font-bold uppercase tracking-wide"
+            >
+              Výkazy
+            </h2>
+            <InfoTooltip label="Výkazy">
+              Přehled výkazů práce z Jira a Clockify. Kliknutím na den zobrazíte podrobnosti nebo
+              přidáte nový výkaz.
+            </InfoTooltip>
+          </div>
 
           <div className="flex items-center gap-3">
             {isJiraConnected && (

@@ -17,6 +17,18 @@ import { ConnectorType } from '@prisma/client'
 import { GmailService, GmailUnauthorizedError } from './gmail.service'
 import { ConnectorCredentialsService } from '../connector-credentials.service'
 
+function decodeMimeWords(value: string): string {
+  return value
+    .replace(/(=\?[^?]+\?[BQ]\?[^?]*\?=)\s+(?==\?)/gi, '$1')
+    .replace(/=\?UTF-8\?([BQ])\?([^?]*)\?=/gi, (_match, encoding: string, encoded: string) => {
+      const bytes = encoding.toUpperCase() === 'B'
+        ? Buffer.from(encoded, 'base64')
+        : Buffer.from(encoded.replace(/_/g, ' ').replace(/=([0-9a-f]{2})/gi,
+          (_escape, hex: string) => String.fromCharCode(parseInt(hex, 16))), 'latin1')
+      return bytes.toString('utf8')
+    })
+}
+
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
 const mockCredentials = {
@@ -326,6 +338,49 @@ describe('GmailService', () => {
   })
 
   describe('reply actions', () => {
+    it.each([
+      {
+        encoding: 'plain UTF-8',
+        to: 'Klvaňa Michaela <michaela@example.com>',
+        cc: '"Zapletal, Ondřej" <ondrej@example.com>, Kůrková Lenka <lenka@example.com>',
+      },
+      {
+        encoding: 'RFC 2047 Base64',
+        to: `=?UTF-8?B?${Buffer.from('Klvaňa Michaela').toString('base64')}?= <michaela@example.com>`,
+        cc: `=?UTF-8?B?${Buffer.from('Zapletal, Ondřej').toString('base64')}?= <ondrej@example.com>, =?UTF-8?B?${Buffer.from('Kůrková Lenka').toString('base64')}?= <lenka@example.com>`,
+      },
+      {
+        encoding: 'RFC 2047 quoted-printable',
+        to: '=?UTF-8?Q?Klva=C5=88a_Michaela?= <michaela@example.com>',
+        cc: '=?UTF-8?Q?Zapletal=2C_Ond=C5=99ej?= <ondrej@example.com>, =?UTF-8?Q?K=C5=AFrkov=C3=A1_Lenka?= <lenka@example.com>',
+      },
+    ])('MIME-encodes $encoding recipient names without changing addresses or quoted commas', async ({ to, cc }) => {
+      mockCredentials.getTokens.mockResolvedValueOnce(makeTokens())
+      mockCredentials.getMetadata.mockResolvedValueOnce(makeMeta())
+      mockFetch(true, {})
+
+      await service.sendReply('user-1', {
+        threadId: 'thread-1',
+        rfcMessageId: '<message-1@example.com>',
+        to,
+        cc,
+        subject: 'CVAK + UNITY update',
+        body: 'Děkuji za zprávu.',
+      })
+
+      const request = (global.fetch as jest.Mock).mock.calls[0][1] as RequestInit
+      const payload = JSON.parse(request.body as string) as { raw: string; threadId: string }
+      const mime = Buffer.from(payload.raw, 'base64url').toString('utf8')
+      const headers = mime.split('\r\n\r\n')[0].replace(/\r\n[ \t]+/g, ' ')
+
+      expect(headers).toMatch(/^[\x00-\x7F]*$/)
+      expect(decodeMimeWords(headers)).toMatch(/^To: "?Klvaňa Michaela"? <michaela@example\.com>\r?$/m)
+      expect(decodeMimeWords(headers)).toMatch(/^Cc: "?Zapletal, Ondřej"? <ondrej@example\.com>, "?Kůrková Lenka"? <lenka@example\.com>\r?$/m)
+      expect(headers).toContain('In-Reply-To: <message-1@example.com>')
+      expect(headers).toContain('References: <message-1@example.com>')
+      expect(payload.threadId).toBe('thread-1')
+    })
+
     it('marks a bounded set of Gmail messages as read with batchModify', async () => {
       mockCredentials.getTokens.mockResolvedValueOnce(makeTokens())
       mockCredentials.getMetadata.mockResolvedValueOnce(makeMeta())
@@ -382,7 +437,9 @@ describe('GmailService', () => {
       const request = (global.fetch as jest.Mock).mock.calls[0][1] as RequestInit
       const raw = JSON.parse(request.body as string).raw as string
       const mime = Buffer.from(raw, 'base64url').toString('utf8')
-      expect(mime).toContain('Subject: =?UTF-8?B?UmU6IMSMbMOhbmt5IGEgWlA=?=')
+      const headers = mime.split('\r\n\r\n')[0].replace(/\r\n[ \t]+/g, ' ')
+      expect(headers).toMatch(/^[\x00-\x7F]*$/)
+      expect(decodeMimeWords(headers)).toContain('Subject: Re: Články a ZP')
     })
   })
 

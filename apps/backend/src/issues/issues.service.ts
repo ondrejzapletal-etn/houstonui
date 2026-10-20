@@ -57,6 +57,31 @@ export class IssuesService {
   }
 
   /**
+   * Fetch and cache a Jira issue summary when an older local record lacks one.
+   * Returns null when Jira is unavailable or the issue cannot be resolved.
+   */
+  async resolveSummary(userId: string, issueKey: string): Promise<string | null> {
+    const cached = await this.prisma.jiraIssue.findUnique({
+      where: { userId_issueKey: { userId, issueKey } },
+      select: { summary: true },
+    })
+    if (cached?.summary.trim() && cached.summary.trim() !== issueKey) return cached.summary
+    return this.refreshSummary(userId, issueKey)
+  }
+
+  async refreshSummary(userId: string, issueKey: string): Promise<string | null> {
+    const details = await this.jira.getIssueDetails(userId, issueKey)
+    const summary = details?.summary.trim()
+    if (!summary || summary === issueKey) return null
+
+    await this.prisma.jiraIssue.updateMany({
+      where: { userId, issueKey },
+      data: { summary, lastSyncedAt: new Date() },
+    })
+    return summary
+  }
+
+  /**
    * Upsert a Jira issue into the local cache.
    * If `projectId` is not supplied, attempts to resolve it automatically
    * by extracting the project key prefix from the issue key.

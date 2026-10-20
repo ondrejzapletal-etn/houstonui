@@ -3,6 +3,13 @@ import { Transform } from 'class-transformer'
 
 const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]*-\d+$/
 
+export class IssueKeyParams {
+  @IsString()
+  @MaxLength(100)
+  @Matches(ISSUE_KEY_PATTERN)
+  issueKey!: string
+}
+
 export class UpsertJiraIssueDto {
   @IsString()
   @Matches(ISSUE_KEY_PATTERN, {

@@ -58,7 +58,8 @@ function ConnectorCard(props: ConnectorCardProps) {
   const isGmail = id === 'gmail';
   const isUsable = status === 'connected' || status === 'warning';
   const showsUnreadIndicator = isUsable && unreadCount !== null && (id === 'gmail' || id === 'slack')
-  const showsConnectedIndicator = isUsable && (id === 'jira' || id === 'clockify')
+  const showsConnectedIndicator = (isUsable && (id === 'jira' || id === 'clockify')) || (id === 'hotspot' && status === 'connected')
+  const showsUnavailableIndicator = id === 'hotspot' && (status === 'warning' || status === 'error' || status === 'token_expired')
 
   const formattedTime = lastCheckedAt
     ? new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit' }).format(
@@ -126,7 +127,7 @@ function ConnectorCard(props: ConnectorCardProps) {
           )}
           <span className="relative flex items-center font-medium text-gray-100">
             {label}
-            {status === 'warning' ? (
+            {status === 'warning' && id !== 'hotspot' ? (
               <svg
                 className="ml-2 h-3.5 w-3.5 shrink-0 text-amber-500"
                 viewBox="0 0 24 24"
@@ -157,8 +158,17 @@ function ConnectorCard(props: ConnectorCardProps) {
           <span
             className="h-3 w-3 rounded-full border border-green-600 bg-green-400"
             role="status"
-            aria-label="Connected"
+            aria-label={id === 'hotspot' ? 'Available' : 'Connected'}
             data-testid={`connected-indicator-${id}`}
+          />
+        )}
+
+        {showsUnavailableIndicator && (
+          <span
+            className="h-3 w-3 shrink-0 rounded-full border border-red-700 bg-red-500"
+            role="status"
+            aria-label="Unavailable"
+            data-testid={`unavailable-indicator-${id}`}
           />
         )}
 
@@ -695,11 +705,14 @@ export default function SourcesSection() {
                   className="absolute left-0 top-full z-30 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-md border border-blue-800/40 bg-blue-900 px-4 py-3 shadow-lg"
                 >
                   <p className="text-xs leading-relaxed text-blue-100">
-                    <strong className="font-semibold">Your credentials stay on the server.</strong>{' '}
-                    After you authorise a provider in your browser, the backend stores access and
-                    refresh tokens in Azure Key Vault. The desktop app receives only connection
-                    status; PostgreSQL stores metadata and a reference to the secret, never token
-                    values.
+                    <strong className="font-semibold">Přístupové údaje zůstávají na backendu.</strong>{' '}
+                    Při připojení zdroje povolíte službě přístup v prohlížeči. Backend ukládá tokeny
+                    do Azure Key Vaultu, kromě vývojového režimu bez nastavení
+                    <code className="mx-1">KEY_VAULT_FORCE_AZURE=true</code>, kdy je ukládá
+                    nešifrovaně do souboru <code className="mx-1">.dev-tokens.json</code>. Desktopová
+                    aplikace tokeny nedostává; zobrazuje stav připojení, počty nepřečtených zpráv,
+                    čas poslední aktualizace a případná upozornění. PostgreSQL uchovává metadata
+                    připojení a název tajného záznamu, nikoli hodnoty tokenů.
                   </p>
                 </div>
               )}
@@ -813,7 +826,7 @@ export default function SourcesSection() {
         {showAddSource && !isLoading && !isError && (
           <div id="add-source-panel" className="mt-3 flex flex-row flex-wrap gap-3">
             {connectors.filter((c) => c.status === 'not_connected').length === 0 ? (
-              <p className="text-sm text-gray-500">Všechny zdroje jsou připojeny.</p>
+              <p className="text-sm text-gray-500">Všechny dostupné zdroje jsou připojeny.</p>
             ) : (
               connectors
                 .filter((c) => c.status === 'not_connected')

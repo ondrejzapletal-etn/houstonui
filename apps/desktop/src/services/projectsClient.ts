@@ -93,6 +93,18 @@ export async function searchIssues(
   return json.data.issues
 }
 
+export async function fetchIssueSummary(
+  accessToken: string,
+  issueKey: string,
+): Promise<string | null> {
+  const response = await fetch(`${API_BASE_URL}/issues/${encodeURIComponent(issueKey)}/summary`, {
+    headers: authHeader(accessToken),
+  })
+  if (!response.ok) throw new Error(`Issue summary fetch failed: ${response.status}`)
+  const json = (await response.json()) as { data: { summary: string | null } }
+  return json.data.summary
+}
+
 export async function upsertIssue(
   accessToken: string | null | undefined,
   body: { issueKey: string; summary: string; projectId?: string },

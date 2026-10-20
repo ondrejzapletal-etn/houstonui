@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common'
 import { CurrentUser, CurrentUserData } from '../auth/current-user.decorator'
 import { IssuesService } from './issues.service'
-import { UpsertJiraIssueDto, IssueSearchQuery } from './dto/issue.dto'
+import { UpsertJiraIssueDto, IssueSearchQuery, IssueKeyParams } from './dto/issue.dto'
 
 @Controller('issues')
 export class IssuesController {
@@ -36,6 +36,12 @@ export class IssuesController {
   async search(@CurrentUser() user: CurrentUserData, @Query() query: IssueSearchQuery) {
     const items = await this.issues.search(this.uid(user, 'search'), query)
     return { success: true, data: { issues: items } }
+  }
+
+  @Get(':issueKey/summary')
+  async summary(@CurrentUser() user: CurrentUserData, @Param() params: IssueKeyParams) {
+    const summary = await this.issues.resolveSummary(this.uid(user, 'summary'), params.issueKey)
+    return { success: true, data: { summary } }
   }
 
   /**

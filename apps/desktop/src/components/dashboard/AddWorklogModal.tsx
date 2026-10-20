@@ -13,6 +13,7 @@ import { useSettingsStore } from '../../store/settingsStore'
 import { useCalendarLink, useSaveCalendarLink } from '../../hooks/useCalendarLink'
 import { useKnowledgeTasks } from '../../hooks/useKnowledge'
 import { useIssueSuggestion } from '../../hooks/useIssueSuggestion'
+import { useRecentIssueSummaries } from '../../hooks/useRecentIssueSummaries'
 import {
   MONTHLY_WORKLOG_ISSUES_QUERY_KEY,
   useMonthlyWorklogIssues,
@@ -175,9 +176,13 @@ export default function AddWorklogModal({ defaultDate, defaultDurationSeconds, c
     return map
   }, [knowledgeTasks])
 
+  const recentIssueSummaries = useRecentIssueSummaries(knowledgeSummaryMap)
+
   // Calendar-link: pre-fill issue key from saved link (falls back to recurring series binding)
-  const { data: calendarLink } = useCalendarLink(calendarEventId, recurringEventId)
+  const { data: calendarLink, isError: isCalendarLinkError, isSuccess: isCalendarLinkSuccess } = useCalendarLink(calendarEventId, recurringEventId)
   const { mutate: saveCalendarLink } = useSaveCalendarLink(calendarEventId ?? '', recurringEventId)
+  const hasNoCalendarLink = isCalendarLinkSuccess && calendarLink === null
+  const shortCalendarEventId = calendarEventId?.slice(0, 12)
 
   // Attendees captured from the calendar event fetch — used for client suggestion
   const [eventAttendees, setEventAttendees] = useState<string[]>([])
@@ -236,6 +241,11 @@ export default function AddWorklogModal({ defaultDate, defaultDurationSeconds, c
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onClose])
+
+  function handleIssueChange(key: string, summary?: string) {
+    setIssueKey(key)
+    setIssueSummary(summary)
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -454,14 +464,55 @@ export default function AddWorklogModal({ defaultDate, defaultDurationSeconds, c
       {/* Panel */}
       <div className={["w-full max-w-md rounded-xl border border-gray-700 bg-gray-900 shadow-2xl mx-4", isClosing ? "modal-animate-close" : ""].join(" ")}>
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-gray-800 px-6 py-4">
-          <h2 id={titleId} className="text-base font-semibold text-gray-100">
-            {isEditMode ? 'Upravit výkaz' : 'Vykaž'}
-          </h2>
+        <div className="flex items-start justify-between gap-3 border-b border-gray-800 px-6 py-4">
+          <div className="min-w-0 flex-1">
+            <h2 id={titleId} className="text-base font-semibold text-gray-100">
+              {isEditMode ? 'Upravit výkaz' : 'Vykaž'}
+            </h2>
+            {calendarEventId && (
+              <div role="group" aria-label="Vazba kalendářové události" className="mt-2 flex min-w-0 flex-col gap-1.5 text-xs">
+                {calendarLink ? (
+                  <div
+                    className="inline-flex max-w-full items-center gap-2 self-start whitespace-nowrap rounded border border-blue-700 bg-blue-900/20 px-2 py-1 font-mono text-blue-300"
+                    aria-label={`Událost: ${calendarEventId}; Jira: ${calendarLink.issueKey}`}
+                  >
+                    <span className="shrink-0" title={calendarEventId}>{shortCalendarEventId}</span>
+                    <span aria-hidden="true" className="shrink-0 text-blue-500">/</span>
+                    <span className="min-w-0 truncate" title={calendarLink.issueKey}>{calendarLink.issueKey}</span>
+                  </div>
+                ) : (
+                  <div className={hasNoCalendarLink ? 'flex min-w-0 items-center gap-3' : 'flex flex-col gap-1.5'}>
+                    <div className="shrink-0 whitespace-nowrap text-gray-400">
+                      Událost: <span className="break-all font-mono text-gray-300">{shortCalendarEventId}</span>
+                    </div>
+                    {isCalendarLinkError ? (
+                      <p role="status" className="text-red-400">Vazbu se nepodařilo načíst.</p>
+                    ) : hasNoCalendarLink ? (
+                      <label className="flex min-w-0 items-center gap-2 whitespace-nowrap text-gray-400">
+                        Jira:
+                        <input
+                          type="text"
+                          aria-label="Jira issue pro událost"
+                          value={issueKey}
+                          onChange={(event) => handleIssueChange(event.target.value)}
+                          placeholder="PROJ-123"
+                          autoComplete="off"
+                          spellCheck={false}
+                          className="w-32 min-w-0 rounded border border-gray-700 bg-gray-800 px-2 py-1 font-mono text-gray-100 placeholder-gray-600 focus:border-yellow-400 focus:outline-none focus:ring-1 focus:ring-yellow-400"
+                        />
+                      </label>
+                    ) : (
+                      <p role="status" className="text-gray-500">Načítám vazbu…</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded p-1 text-gray-500 hover:text-gray-200 focus:outline-none focus:ring-1 focus:ring-yellow-400"
+            className="shrink-0 rounded p-1 text-gray-500 hover:text-gray-200 focus:outline-none focus:ring-1 focus:ring-yellow-400"
             aria-label="Close"
           >
             ✕
@@ -552,7 +603,7 @@ export default function AddWorklogModal({ defaultDate, defaultDurationSeconds, c
                       setTarget('jira')
                       setIssueKey(item.key)
                       setClockifyProjectId('')
-                      setIssueSummary(undefined)
+                      setIssueSummary(recentIssueSummaries.get(item.key))
                     }}
                     className={[
                       'relative group rounded px-2 py-0.5 text-xs border transition-colors',
@@ -562,9 +613,9 @@ export default function AddWorklogModal({ defaultDate, defaultDurationSeconds, c
                     ].join(' ')}
                   >
                     {item.key}
-                    {(knowledgeSummaryMap.get(item.key) ?? item.summary) && (
-                      <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1 whitespace-nowrap rounded border border-gray-600 bg-gray-900 px-2 py-1 text-gray-200 opacity-0 transition-opacity group-hover:opacity-100 z-50">
-                        {knowledgeSummaryMap.get(item.key) ?? item.summary}
+                    {recentIssueSummaries.get(item.key) && (
+                      <span role="tooltip" className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1 whitespace-nowrap rounded border border-gray-600 bg-gray-900 px-2 py-1 text-gray-200 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 z-50">
+                        {recentIssueSummaries.get(item.key)}
                       </span>
                     )}
                   </button>
@@ -644,7 +695,7 @@ export default function AddWorklogModal({ defaultDate, defaultDurationSeconds, c
 
             <IssueSearchInput
               value={issueKey}
-              onChange={(key, summary) => { setIssueKey(key); setIssueSummary(summary) }}
+              onChange={handleIssueChange}
               placeholder="PROJ-123"
               required
               inputRef={firstInputRef}

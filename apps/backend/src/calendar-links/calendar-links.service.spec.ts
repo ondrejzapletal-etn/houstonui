@@ -9,13 +9,21 @@ const mockPrisma = {
     findUnique: jest.fn(),
     findFirst: jest.fn(),
   },
+  client: {
+    findFirst: jest.fn(),
+  },
+  project: {
+    findMany: jest.fn(),
+  },
   jiraIssue: {
     findUnique: jest.fn(),
+    findMany: jest.fn(),
   },
 }
 
 const mockIssues = {
   upsertFromKey: jest.fn(),
+  refreshSummary: jest.fn(),
 }
 
 describe('CalendarLinksService', () => {
@@ -80,6 +88,24 @@ describe('CalendarLinksService', () => {
       mockPrisma.calendarEventIssueLink.findFirst.mockResolvedValueOnce(null)
 
       await expect(service.find('user-1', 'event-1', 'series-1')).rejects.toBeInstanceOf(NotFoundException)
+    })
+  })
+
+  describe('suggestIssues', () => {
+    it('enriches an issue with an empty cached summary before returning it', async () => {
+      mockPrisma.client.findFirst.mockResolvedValueOnce({ id: 'client-1', name: 'Operativa' })
+      mockPrisma.project.findMany.mockResolvedValueOnce([{ id: 'project-1' }])
+      mockPrisma.jiraIssue.findMany.mockResolvedValueOnce([{ issueKey: 'TIME-2', summary: '' }])
+      mockIssues.refreshSummary.mockResolvedValueOnce('Příprava reportu')
+
+      const result = await service.suggestIssues('user-1', ['user@operativa.cz'])
+
+      expect(mockIssues.refreshSummary).toHaveBeenCalledWith('user-1', 'TIME-2')
+      expect(result).toEqual({
+        client: { id: 'client-1', name: 'Operativa' },
+        unknownDomain: null,
+        issues: [{ issueKey: 'TIME-2', summary: 'Příprava reportu' }],
+      })
     })
   })
 })

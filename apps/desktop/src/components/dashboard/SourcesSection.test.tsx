@@ -201,7 +201,31 @@ describe('SourcesSection', () => {
     expect(screen.getByText('Error')).toBeInTheDocument()
   })
 
-  it('shows the VPN warning immediately when the HOT SPOT card is hovered', async () => {
+  it('shows a green indicator when HOT SPOT is available', async () => {
+    mockFetchConnectors.mockResolvedValueOnce({
+      connectors: [{ id: 'hotspot', label: 'Hot Spot', status: 'connected', unreadCount: null, lastCheckedAt: null }],
+    })
+    renderInProviders()
+
+    const indicator = await screen.findByTestId('connected-indicator-hotspot')
+    expect(indicator).toHaveAccessibleName('Available')
+    expect(indicator).toHaveClass('bg-green-400', 'rounded-full')
+    expect(screen.queryByTestId('unavailable-indicator-hotspot')).not.toBeInTheDocument()
+  })
+
+  it.each(['error', 'token_expired'] as const)('shows a red indicator for HOT SPOT with status %s', async (status) => {
+    mockFetchConnectors.mockResolvedValueOnce({
+      connectors: [{ id: 'hotspot', label: 'Hot Spot', status, unreadCount: null, lastCheckedAt: null }],
+    })
+    renderInProviders()
+
+    const indicator = await screen.findByTestId('unavailable-indicator-hotspot')
+    expect(indicator).toHaveAccessibleName('Unavailable')
+    expect(indicator).toHaveClass('bg-red-500', 'rounded-full')
+    expect(screen.queryByTestId('connected-indicator-hotspot')).not.toBeInTheDocument()
+  })
+
+  it('shows a red indicator and the VPN tooltip when HOT SPOT is unavailable', async () => {
     const hotSpotWarning: ConnectorInfo = {
       id: 'hotspot',
       label: 'Hot Spot',
@@ -217,9 +241,11 @@ describe('SourcesSection', () => {
     const card = screen.getByText('Hot Spot').closest('.card')
     const tooltip = screen.getByRole('tooltip', { name: 'Interní síť není dostupná, připoj se na VPN' })
 
-    const warningIndicator = screen.getByTestId('warning-status-indicator')
-    expect(warningIndicator).toHaveClass('ml-2')
-    expect(warningIndicator.querySelector('path:last-child')).toHaveAttribute('fill', 'black')
+    const unavailableIndicator = screen.getByTestId('unavailable-indicator-hotspot')
+    expect(unavailableIndicator).toHaveClass('bg-red-500', 'rounded-full')
+    expect(unavailableIndicator).toHaveAccessibleName('Unavailable')
+    expect(screen.queryByTestId('connected-indicator-hotspot')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('warning-status-indicator')).not.toBeInTheDocument()
     expect(screen.queryByText('Varování')).not.toBeInTheDocument()
     expect(card).not.toHaveAttribute('title')
     expect(tooltip).toHaveClass('opacity-0')

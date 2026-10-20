@@ -1,5 +1,6 @@
 import type { ContextCalendarEvent } from '@houston/shared-types'
 import { useDashboardCalendarEvents } from '../../hooks/useCalendarEvents'
+import InfoTooltip from './InfoTooltip'
 
 function toDateKey(iso: string): string {
   return iso.substring(0, 10)
@@ -66,7 +67,13 @@ export default function CalendarSection() {
 
   return (
     <section>
-      <h2 className="text-lg font-bold uppercase tracking-wide mb-2">Kalendář</h2>
+      <div className="mb-2 flex items-center gap-2">
+        <h2 className="text-lg font-bold uppercase tracking-wide">Kalendář</h2>
+        <InfoTooltip label="Kalendář">
+          Přehled událostí z připojeného Google Kalendáře na dnešek a zítřek. U událostí se může
+          zobrazit místo nebo odkaz na Google Meet.
+        </InfoTooltip>
+      </div>
       {isLoading ? (
         <div className="rounded-xl border border-gray-800 bg-gray-900 px-4 py-6 text-center text-sm text-gray-500">Načítání…</div>
       ) : error ? (

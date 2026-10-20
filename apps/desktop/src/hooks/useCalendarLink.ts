@@ -1,10 +1,14 @@
-import { useQuery } from '@tanstack/react-query'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../store/authStore'
 import { fetchCalendarLink, upsertCalendarLink } from '../services/projectsClient'
 import type { CalendarIssueLinkDto, UpsertCalendarIssueLinkDto } from '@houston/shared-types'
 
 export const CALENDAR_LINK_QUERY_KEY = (eventId: string) => ['calendar-links', eventId]
+
+const calendarLinkQueryKey = (eventId: string, recurringEventId?: string): string[] => [
+  ...CALENDAR_LINK_QUERY_KEY(eventId),
+  recurringEventId ?? '',
+]
 
 /**
  * Fetches the saved issue link for a calendar event.
@@ -15,7 +19,7 @@ export function useCalendarLink(calendarEventId: string | undefined, recurringEv
   const accessToken = useAuthStore((s) => s.accessToken)
 
   return useQuery<CalendarIssueLinkDto | null>({
-    queryKey: [...CALENDAR_LINK_QUERY_KEY(calendarEventId ?? ''), recurringEventId ?? ''],
+    queryKey: calendarLinkQueryKey(calendarEventId ?? '', recurringEventId),
     queryFn: () => fetchCalendarLink(accessToken ?? '', calendarEventId!, recurringEventId),
     enabled: !!calendarEventId,
     staleTime: 60_000,
@@ -32,7 +36,11 @@ export function useSaveCalendarLink(calendarEventId: string, recurringEventId?: 
 
   return useMutation<CalendarIssueLinkDto, Error, UpsertCalendarIssueLinkDto>({
     mutationFn: (body) => upsertCalendarLink(accessToken ?? '', calendarEventId, { ...body, recurringEventId }),
-    onSuccess: () => {
+    onSuccess: (link) => {
+      queryClient.setQueryData(
+        calendarLinkQueryKey(calendarEventId, recurringEventId),
+        link,
+      )
       queryClient.invalidateQueries({ queryKey: CALENDAR_LINK_QUERY_KEY(calendarEventId) })
       queryClient.invalidateQueries({ queryKey: ['calendar-links', 'all'] })
     },

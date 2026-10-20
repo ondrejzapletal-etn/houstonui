@@ -136,6 +136,19 @@ POST /api/v1/worklogs
 
 Creates Jira worklog.
 
+GET /api/v1/issues/:issueKey/summary
+
+Resolves a Jira issue title for recent-issue tooltips when the worklog modal
+opens. Requires authentication and a valid Jira issue key. Uses the current
+user's cached summary first, otherwise queries Jira through the backend using
+that user's connector credentials and updates existing cache records.
+Submitting a worklog is not required.
+
+Returns `{ "success": true, "data": { "summary": "Issue title" } }`.
+`summary` is `null` when Jira cannot resolve the issue, including missing
+credentials or insufficient access. The desktop keeps the form usable and
+persists resolved titles without changing recent-issue order.
+
 10. Streaming APIs
 GET /api/v1/scan/stream
 

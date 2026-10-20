@@ -18,6 +18,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { ConnectorCredentialsService } from '../connector-credentials.service'
 import { ConnectorType } from '@prisma/client'
+import MailComposer from 'nodemailer/lib/mail-composer'
 import {
   parseGoogleDocsCommentNotification,
   type GoogleDocsCommentNotification,
@@ -154,12 +155,6 @@ function decodeRfc2047Header(value: string): string {
   return value.replace(/=\?utf-?8\?B\?([^?]*)\?=/gi, (_match, encoded: string) =>
     Buffer.from(encoded, 'base64').toString('utf8'),
   )
-}
-
-function encodeRfc2047Header(value: string): string {
-  return /^[\x20-\x7E]*$/.test(value)
-    ? value
-    : `=?UTF-8?B?${Buffer.from(value, 'utf8').toString('base64')}?=`
 }
 
 @Injectable()
@@ -675,24 +670,17 @@ export class GmailService {
     const replySubject = opts.subject.toLowerCase().startsWith('re:')
       ? opts.subject
       : `Re: ${opts.subject}`
-    const subject = encodeRfc2047Header(replySubject)
-
-    const lines: string[] = [
-      `To: ${opts.to}`,
-      ...(opts.cc ? [`CC: ${opts.cc}`] : []),
-      `Subject: ${subject}`,
-      `Content-Type: text/plain; charset=UTF-8`,
-      ...(opts.rfcMessageId
-        ? [`In-Reply-To: ${opts.rfcMessageId}`, `References: ${opts.rfcMessageId}`]
-        : []),
-      '',
-      opts.body,
-    ]
-    const raw = Buffer.from(lines.join('\r\n'))
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '')
+    const message = await new MailComposer({
+      to: opts.to,
+      cc: opts.cc,
+      subject: replySubject,
+      text: opts.body,
+      inReplyTo: opts.rfcMessageId || undefined,
+      references: opts.rfcMessageId || undefined,
+      disableFileAccess: true,
+      disableUrlAccess: true,
+    }).compile().build()
+    const raw = message.toString('base64url')
 
     const res = await fetch(`${GMAIL_MESSAGES_URL}/send`, {
       method: 'POST',

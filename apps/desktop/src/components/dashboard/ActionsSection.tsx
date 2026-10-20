@@ -5,6 +5,7 @@ import { useAuthStore } from '../../store/authStore'
 import { useScanStream, loadLastScan, type LastScanResult, type AutoReadSuggestionItem } from '../../services/scanService'
 import { ProposalCard } from './ProposalCard'
 import { ScanRocketProgressBar } from './ScanRocketProgressBar'
+import InfoTooltip from './InfoTooltip'
 import AutoReadModal from './AutoReadModal'
 import TaskModal from './TaskModal'
 import type { ScanProposalData, Proposal } from '@houston/shared-types'
@@ -298,12 +299,18 @@ export default function ActionsSection() {
         {/* Header row */}
         <div className="flex items-center justify-between">
           <div>
-            <h2
-              id="actions-heading"
-              className="text-lg font-bold uppercase tracking-wide"
-            >
-              Komunikace
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2
+                id="actions-heading"
+                className="text-lg font-bold uppercase tracking-wide"
+              >
+                Komunikace
+              </h2>
+              <InfoTooltip label="Komunikace">
+                Zde najdete návrhy vytvořené při scanu připojených zdrojů. Každý návrh si můžete
+                projít a rozhodnout, jak s ním naložit.
+              </InfoTooltip>
+            </div>
             {isIdle && lastScan && (
               <p className="text-xs text-gray-500 mt-0.5">
                 Poslední scan:{' '}
